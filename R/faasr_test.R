@@ -2,33 +2,20 @@
 #'
 #' This function loads a FaaSr workflow JSON and executes functions sequentially
 #' in InvokeNext order (no concurrency). It sources user functions from common
-#' local locations (./R, ./functions). Optionally, it can run each function in
-#' a Docker container by bind mounting ./faasr_data to /faasr_data and passing
-#' the full JSON payload to the container entrypoint (mirroring original faasr_test).
+#' local locations (./R, ./functions). Docker mode temporarily disabled.
 #'
 #' @param json_path path to workflow JSON
 #' @return TRUE if all functions run successfully; stops on error
 #' @import jsonlite
 #' @import cli
 #' @export
-docker_default_version <- "latest"
-docker_default_image <- "ghcr.io/faasr/local-test"
 faasr_test <- function(json_path) {
   if (!file.exists(json_path)) stop(sprintf("Workflow JSON not found: %s", json_path))
   wf <- jsonlite::fromJSON(json_path, simplifyVector = FALSE)
   if (is.null(wf$ActionList)) stop("Invalid workflow JSON: missing ActionList")
   if (is.null(wf$FunctionInvoke)) stop("Invalid workflow JSON: missing FunctionInvoke")
   
-  # Default to local mode; allow enabling Docker via env var
-  use_docker <- list(
-    use = FALSE,
-    image = docker_default_image,
-    version = docker_default_version
-  )
-  use_docker_env <- Sys.getenv("FAASR_LOCAL_TEST_USE_DOCKER", unset = "")
-  if (tolower(use_docker_env) %in% c("1", "true", "yes")) {
-    use_docker$use <- TRUE
-  }
+  # Docker mode removed for now; always run locally
 
 
   # Source user R files from common locations
@@ -56,6 +43,14 @@ faasr_test <- function(json_path) {
   if (!dir.exists(state_dir)) dir.create(state_dir, recursive = TRUE)
   if (!dir.exists(files_dir)) dir.create(files_dir, recursive = TRUE)
 
+  # Schema path preference: local repo schema.json, else temp schema
+  schema_repo_path <- file.path(getwd(), "schema.json")
+  schema_temp_path <- file.path(temp_dir, "FaaSr.schema.json")
+  if (!file.exists(schema_temp_path)) {
+    schema_url <- "https://raw.githubusercontent.com/FaaSr/FaaSr-package/main/schema/FaaSr.schema.json"
+    try(utils::download.file(schema_url, schema_temp_path, quiet = TRUE), silent = TRUE)
+  }
+
   visited <- character()
   while (length(queue) > 0) {
     name <- queue[1]; queue <- queue[-1]
@@ -68,71 +63,35 @@ faasr_test <- function(json_path) {
 
     cli::cli_h2(sprintf("Running %s (%s)", name, func_name))
 
-    # Decide local R vs Docker
-    if (isTRUE(use_docker$use)) {
-      # Ensure faasr_data exists and copy local R/ into faasr_data/R for container to source
-      faasr_data_wd <- file.path(getwd(), "faasr_data")
-      if (!dir.exists(faasr_data_wd)) dir.create(faasr_data_wd, recursive = TRUE)
-      r_host_dir <- file.path(faasr_data_wd, "R")
-      if (!dir.exists(r_host_dir)) dir.create(r_host_dir, recursive = TRUE)
-      if (dir.exists("R")) {
-        rfiles <- list.files("R", pattern = "\\.R$", full.names = TRUE)
-        for (rf in rfiles) file.copy(rf, file.path(r_host_dir, basename(rf)), overwrite = TRUE)
-      }
-
-      # Ensure temp/faasr_state_info exists (align with package test harness)
-      temp_state_dir <- file.path(faasr_data_wd, "temp", "faasr_state_info")
-      if (!dir.exists(temp_state_dir)) dir.create(temp_state_dir, recursive = TRUE)
-
-      # Ensure schema exists in temp (align with package downloading behavior)
-      schema_path <- file.path(faasr_data_wd, "temp", "FaaSr.schema.json")
-      if (!file.exists(schema_path)) {
-        schema_url <- "https://raw.githubusercontent.com/FaaSr/FaaSr-package/main/schema/FaaSr.schema.json"
-        try(utils::download.file(schema_url, schema_path, quiet = TRUE), silent = TRUE)
-      }
-
-      # Determine image:version (use a single test image, like the package)
-      image_tag <- paste0(use_docker$image, ":", use_docker$version)
-
-      # Original style: set current function and pass full payload JSON as single arg
-      wf$FunctionInvoke <- name
-      faasr_input <- jsonlite::toJSON(wf, auto_unbox = TRUE)
-      docker_cmd <- paste0(
-        "docker run --rm --platform=linux/amd64 --name faasr-", name,
-        " --mount type=bind,source='", faasr_data_wd, "',target='/faasr_data' ",
-        image_tag, " '", faasr_input, "'"
-      )
-
-      res_lines <- try(system(docker_cmd, intern = TRUE, ignore.stderr = FALSE, ignore.stdout = FALSE), silent = TRUE)
-      if (inherits(res_lines, "try-error")) {
-        cli::cli_alert_danger(as.character(res_lines))
-        stop(sprintf("Docker execution failed for %s", name))
-      }
-      # Interpret last line as TRUE/FALSE if present; otherwise treat as TRUE
-      last <- if (length(res_lines)) res_lines[length(res_lines)] else "TRUE"
-      res <- if (identical(last, "TRUE") || identical(last, TRUE)) TRUE else if (identical(last, "FALSE") || identical(last, FALSE)) FALSE else TRUE
-    } else {
-      # Local R execution with original-style working directory and state marker
-      if (!exists(func_name, mode = "function", envir = .GlobalEnv)) {
-        stop(sprintf("Function not found in environment: %s (node %s)", func_name, name))
-      }
-      run_dir <- file.path(temp_dir, name)
-      if (!dir.exists(run_dir)) dir.create(run_dir, recursive = TRUE)
-      orig_wd <- getwd()
-      on.exit(setwd(orig_wd), add = TRUE)
-      # Fix the data root so faasr_* uses faasr_data/files regardless of WD
-      Sys.setenv(FAASR_DATA_ROOT = faasr_data_wd)
-      setwd(run_dir)
-
-      f <- get(func_name, envir = .GlobalEnv)
-      res <- try(do.call(f, args), silent = TRUE)
-      if (inherits(res, "try-error")) {
-        cli::cli_alert_danger(as.character(res))
-        stop(sprintf("Error executing %s", func_name))
-      }
-      # Mark success similar to package's .done files
-      utils::write.table("TRUE", file = file.path(state_dir, paste0(name, ".done")), row.names = FALSE, col.names = FALSE)
+    # Configuration check prior to execution
+    cfg <- faasr_configuration_check(wf, name, state_dir)
+    if (identical(cfg, "next")) {
+      cli::cli_alert_info("Skipping execution; waiting for predecessors")
+      next
     }
+    if (!identical(cfg, TRUE)) {
+      stop(cfg)
+    }
+    # Local R execution with original-style working directory and state marker
+    if (!exists(func_name, mode = "function", envir = .GlobalEnv)) {
+      stop(sprintf("Function not found in environment: %s (node %s)", func_name, name))
+    }
+    run_dir <- file.path(temp_dir, name)
+    if (!dir.exists(run_dir)) dir.create(run_dir, recursive = TRUE)
+    orig_wd <- getwd()
+    on.exit(setwd(orig_wd), add = TRUE)
+    # Fix the data root so faasr_* uses faasr_data/files regardless of WD
+    Sys.setenv(FAASR_DATA_ROOT = faasr_data_wd)
+    setwd(run_dir)
+
+    f <- get(func_name, envir = .GlobalEnv)
+    res <- try(do.call(f, args), silent = TRUE)
+    if (inherits(res, "try-error")) {
+      cli::cli_alert_danger(as.character(res))
+      stop(sprintf("Error executing %s", func_name))
+    }
+    # Mark success similar to package's .done files
+    utils::write.table("TRUE", file = file.path(state_dir, paste0(name, ".done")), row.names = FALSE, col.names = FALSE)
 
     visited <- c(visited, name)
     # enqueue next
@@ -156,3 +115,171 @@ faasr_test <- function(json_path) {
 }
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
+
+# Simple configuration check mirroring the package's behavior
+faasr_configuration_check <- function(faasr, current_func, state_dir) {
+  # Basic JSON sanity
+  if (is.null(faasr$ActionList) || is.null(faasr$FunctionInvoke)) {
+    return("JSON parsing error")
+  }
+
+  # JSON schema validation if jsonvalidate is available
+  schema_file <- file.path(getwd(), "schema.json")
+  if (!file.exists(schema_file)) {
+    temp_dir <- dirname(state_dir)
+    cand <- file.path(temp_dir, "FaaSr.schema.json")
+    if (file.exists(cand)) schema_file <- cand
+  }
+  if (file.exists(schema_file) && requireNamespace("jsonvalidate", quietly = TRUE)) {
+    json_txt <- try(jsonlite::toJSON(faasr, auto_unbox = TRUE), silent = TRUE)
+    if (!inherits(json_txt, "try-error")) {
+      ok <- try(jsonvalidate::json_validate(json = json_txt, schema = schema_file), silent = TRUE)
+      if (!inherits(ok, "try-error") && isFALSE(ok)) {
+        return("JSON parsing error")
+      }
+    }
+  }
+
+  # Workflow cycle and reachability check (DFS on ActionList graph)
+  graph_ok <- try(.faasr_check_workflow_cycle_local(faasr, faasr$FunctionInvoke), silent = TRUE)
+  if (inherits(graph_ok, "try-error")) {
+    return("cycle/unreachable faasr_state_info errors")
+  }
+
+  # Data store endpoint checks
+  if (!is.null(faasr$DataStores)) {
+    for (datastore in names(faasr$DataStores)) {
+      endpoint <- faasr$DataStores[[datastore]]$Endpoint
+      if ((!is.null(endpoint)) && (nzchar(endpoint)) && !startsWith(endpoint, "https")) {
+        return("data store errors")
+      }
+    }
+  }
+
+  # default/logging data store presence
+  if (!is.null(faasr$DefaultDataStore)) {
+    if (is.null(faasr$DataStores) || !faasr$DefaultDataStore %in% names(faasr$DataStores)) {
+      return("default server errors")
+    }
+  }
+  if (!is.null(faasr$LoggingDataStore)) {
+    if (is.null(faasr$DataStores) || !faasr$LoggingDataStore %in% names(faasr$DataStores)) {
+      return("logging server errors")
+    }
+  }
+
+  # Predecessor gating: if multiple predecessors, require all .done
+  predecessors <- .faasr_find_predecessors(faasr$ActionList, current_func)
+  if (length(predecessors) > 1) {
+    done_list <- try(list.files(state_dir), silent = TRUE)
+    if (inherits(done_list, "try-error")) done_list <- character()
+    for (p in predecessors) {
+      if (!(paste0(p, ".done") %in% done_list)) {
+        return("next")
+      }
+    }
+  }
+
+  TRUE
+}
+
+.faasr_find_predecessors <- function(action_list, target_func) {
+  preds <- character()
+  for (nm in names(action_list)) {
+    nx <- action_list[[nm]]$InvokeNext %||% list()
+    # normalize to character vector of names
+    next_names <- character()
+    if (is.character(nx)) {
+      next_names <- sub("\\(.*$", "", nx)
+    } else if (is.list(nx)) {
+      for (item in nx) {
+        if (is.character(item)) {
+          next_names <- c(next_names, sub("\\(.*$", "", item))
+        } else if (is.list(item)) {
+          if (!is.null(item$True)) next_names <- c(next_names, sub("\\(.*$", "", unlist(item$True)))
+          if (!is.null(item$False)) next_names <- c(next_names, sub("\\(.*$", "", unlist(item$False)))
+        }
+      }
+    }
+    if (length(next_names) && any(next_names == target_func)) {
+      preds <- c(preds, nm)
+    }
+  }
+  unique(preds)
+}
+
+# Build adjacency list from ActionList using InvokeNext references
+.faasr_build_adjacency <- function(action_list) {
+  adj <- list()
+  for (nm in names(action_list)) {
+    nx <- action_list[[nm]]$InvokeNext %||% list()
+    next_names <- character()
+    if (is.character(nx)) {
+      next_names <- sub("\\(.*$", "", nx)
+    } else if (is.list(nx)) {
+      for (item in nx) {
+        if (is.character(item)) {
+          next_names <- c(next_names, sub("\\(.*$", "", item))
+        } else if (is.list(item)) {
+          if (!is.null(item$True)) next_names <- c(next_names, sub("\\(.*$", "", unlist(item$True)))
+          if (!is.null(item$False)) next_names <- c(next_names, sub("\\(.*$", "", unlist(item$False)))
+        }
+      }
+    }
+    if (length(next_names)) adj[[nm]] <- unique(next_names)
+  }
+  adj
+}
+
+# Detect cycles and unreachable nodes starting from FunctionInvoke
+.faasr_check_workflow_cycle_local <- function(faasr, start_node) {
+  action_list <- faasr$ActionList
+  if (is.null(action_list) || !length(action_list)) {
+    stop("invalid action list")
+  }
+  if (is.null(start_node) || !nzchar(start_node) || !(start_node %in% names(action_list))) {
+    stop("invalid start node")
+  }
+
+  adj <- .faasr_build_adjacency(action_list)
+
+  visited <- new.env(parent = emptyenv())
+  stack <- new.env(parent = emptyenv())
+
+  is_cyclic <- function(node) {
+    if (!(node %in% names(action_list))) {
+      stop(sprintf("invalid function trigger: %s", node))
+    }
+    if (isTRUE(get0(node, envir = stack, inherits = FALSE, ifnotfound = FALSE))) {
+      return(TRUE)
+    }
+    assign(node, TRUE, envir = stack)
+    assign(node, TRUE, envir = visited)
+    nbrs <- adj[[node]]
+    if (!is.null(nbrs) && length(nbrs)) {
+      for (nbr in nbrs) {
+        if (!isTRUE(get0(nbr, envir = visited, inherits = FALSE, ifnotfound = FALSE))) {
+          if (is_cyclic(nbr)) return(TRUE)
+        } else if (isTRUE(get0(nbr, envir = stack, inherits = FALSE, ifnotfound = FALSE))) {
+          return(TRUE)
+        }
+      }
+    }
+    assign(node, FALSE, envir = stack)
+    FALSE
+  }
+
+  if (is_cyclic(start_node)) {
+    stop("cycle detected")
+  }
+
+  # reachability: ensure all nodes are visited
+  all_nodes <- names(action_list)
+  visited_nodes <- ls(visited)
+  unreachable <- setdiff(all_nodes, visited_nodes)
+  if (length(unreachable)) {
+    stop(sprintf("unreachable actions: %s", paste(unreachable, collapse = ", ")))
+  }
+
+  TRUE
+}
