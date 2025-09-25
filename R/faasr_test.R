@@ -1,25 +1,23 @@
-#' faasr_test: Run a workflow locally and sequentially (R), with optional Docker
+#' faasr_test: Run an R workflow locally 
 #'
 #' This function loads a FaaSr workflow JSON and executes functions sequentially
-#' in InvokeNext order (no concurrency). It sources user functions from common
-#' local locations (./R, ./functions). Docker mode temporarily disabled.
+#' in InvokeNext order
 #'
 #' @param json_path path to workflow JSON
 #' @return TRUE if all functions run successfully; stops on error
 #' @import jsonlite
 #' @import cli
 #' @export
+
 faasr_test <- function(json_path) {
   if (!file.exists(json_path)) stop(sprintf("Workflow JSON not found: %s", json_path))
   wf <- jsonlite::fromJSON(json_path, simplifyVector = FALSE)
   if (is.null(wf$ActionList)) stop("Invalid workflow JSON: missing ActionList")
   if (is.null(wf$FunctionInvoke)) stop("Invalid workflow JSON: missing FunctionInvoke")
   
-  # Docker mode removed for now; always run locally
 
-
-  # Source user R files from common locations
-  src_dirs <- c("R", "functions", ".", file.path("faasr_data", "R"))
+  # Source user R files from faasr_data/R
+  src_dirs <- c(file.path("faasr_data", "R"))
   for (d in src_dirs) {
     if (dir.exists(d)) {
       rfiles <- list.files(d, pattern = "\\.R$", full.names = TRUE)
@@ -29,7 +27,7 @@ faasr_test <- function(json_path) {
     }
   }
 
-  # Build a simple queue for sequential BFS-like execution.
+  # Build a simple queue for the functions in the workflow
 
   queue <- c(wf$FunctionInvoke)
 
@@ -50,21 +48,31 @@ faasr_test <- function(json_path) {
     schema_url <- "https://raw.githubusercontent.com/FaaSr/FaaSr-package/main/schema/FaaSr.schema.json"
     try(utils::download.file(schema_url, schema_temp_path, quiet = TRUE), silent = TRUE)
   }
+  # Go through the functions in the workflow
+  # One-time global configuration validation: schema + cycle detection
+  cfg_once <- faasr_configuration_check(wf, state_dir)
+  if (!identical(cfg_once, TRUE)) {
+    stop(cfg_once)
+  }
 
   visited <- character()
   while (length(queue) > 0) {
+
+    #Get the next function in the queue
     name <- queue[1]; queue <- queue[-1]
     if (name %in% visited) next
     node <- wf$ActionList[[name]]
     if (is.null(node)) next
 
+    #Get the function name and arguments
     func_name <- node$FunctionName
     args <- node$Arguments %||% list()
 
+    #Print the function name and arguments
     cli::cli_h2(sprintf("Running %s (%s)", name, func_name))
 
-    # Configuration check prior to execution
-    cfg <- faasr_configuration_check(wf, name, state_dir)
+    # Predecessor gating prior to execution
+    cfg <- faasr_predecessor_gate(wf$ActionList, name, state_dir)
     if (identical(cfg, "next")) {
       cli::cli_alert_info("Skipping execution; waiting for predecessors")
       next
@@ -117,7 +125,7 @@ faasr_test <- function(json_path) {
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
 # Simple configuration check mirroring the package's behavior
-faasr_configuration_check <- function(faasr, current_func, state_dir) {
+faasr_configuration_check <- function(faasr, state_dir) {
   # Basic JSON sanity
   if (is.null(faasr$ActionList) || is.null(faasr$FunctionInvoke)) {
     return("JSON parsing error")
@@ -146,40 +154,6 @@ faasr_configuration_check <- function(faasr, current_func, state_dir) {
     return("cycle/unreachable faasr_state_info errors")
   }
 
-  # Data store endpoint checks
-  if (!is.null(faasr$DataStores)) {
-    for (datastore in names(faasr$DataStores)) {
-      endpoint <- faasr$DataStores[[datastore]]$Endpoint
-      if ((!is.null(endpoint)) && (nzchar(endpoint)) && !startsWith(endpoint, "https")) {
-        return("data store errors")
-      }
-    }
-  }
-
-  # default/logging data store presence
-  if (!is.null(faasr$DefaultDataStore)) {
-    if (is.null(faasr$DataStores) || !faasr$DefaultDataStore %in% names(faasr$DataStores)) {
-      return("default server errors")
-    }
-  }
-  if (!is.null(faasr$LoggingDataStore)) {
-    if (is.null(faasr$DataStores) || !faasr$LoggingDataStore %in% names(faasr$DataStores)) {
-      return("logging server errors")
-    }
-  }
-
-  # Predecessor gating: if multiple predecessors, require all .done
-  predecessors <- .faasr_find_predecessors(faasr$ActionList, current_func)
-  if (length(predecessors) > 1) {
-    done_list <- try(list.files(state_dir), silent = TRUE)
-    if (inherits(done_list, "try-error")) done_list <- character()
-    for (p in predecessors) {
-      if (!(paste0(p, ".done") %in% done_list)) {
-        return("next")
-      }
-    }
-  }
-
   TRUE
 }
 
@@ -206,6 +180,21 @@ faasr_configuration_check <- function(faasr, current_func, state_dir) {
     }
   }
   unique(preds)
+}
+
+# Predecessor gating: if multiple predecessors, require all .done present
+faasr_predecessor_gate <- function(action_list, current_func, state_dir) {
+  predecessors <- .faasr_find_predecessors(action_list, current_func)
+  if (length(predecessors) > 1) {
+    done_list <- try(list.files(state_dir), silent = TRUE)
+    if (inherits(done_list, "try-error")) done_list <- character()
+    for (p in predecessors) {
+      if (!(paste0(p, ".done") %in% done_list)) {
+        return("next")
+      }
+    }
+  }
+  TRUE
 }
 
 # Build adjacency list from ActionList using InvokeNext references
