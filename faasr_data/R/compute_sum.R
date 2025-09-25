@@ -26,6 +26,13 @@ compute_sum <- function(folder, input1, input2, output) {
   #
   faasr_put_file(local_file="output.csv", remote_folder=folder, remote_file=output)
 
+  # Verify presence via list, then fetch to a temp filename to exercise get
+  listed <- try(faasr_get_folder_list(faasr_prefix=folder), silent=TRUE)
+  if (!inherits(listed, "try-error")) {
+    faasr_log(paste0("Listing after compute (", folder, "): ", paste(listed, collapse=", ")))
+  }
+  faasr_get_file(remote_folder=folder, remote_file=output, local_file="output_copy.csv")
+
   # Print a log message
   # 
   log_msg <- paste0('Function compute_sum finished; output written to ', folder, '/', output, ' in default S3 bucket')

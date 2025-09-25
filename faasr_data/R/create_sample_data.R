@@ -26,6 +26,18 @@ create_sample_data <- function(folder, output1, output2) {
   faasr_put_file(local_file="df1.csv", remote_folder=folder, remote_file=output1)
   faasr_put_file(local_file="df2.csv", remote_folder=folder, remote_file=output2)
 
+  # Exercise listing API: list files under the folder prefix after uploads
+  listed <- try(faasr_get_folder_list(faasr_prefix=folder), silent=TRUE)
+  if (!inherits(listed, "try-error")) {
+    faasr_log(paste0("Listing after upload (", folder, "): ", paste(listed, collapse=", ")))
+  }
+
+  # Exercise delete API safely: create a probe file, upload, then delete it
+  writeLines("probe", "probe.tmp")
+  faasr_put_file(local_file="probe.tmp", remote_folder=folder, remote_file="probe.tmp")
+  faasr_delete_file(remote_folder=folder, remote_file="probe.tmp")
+  unlink("probe.tmp")
+
   # Print a log message
   # 
   log_msg <- paste0('Function create_sample_data finished; outputs written to folder ', folder, ' in default S3 bucket')

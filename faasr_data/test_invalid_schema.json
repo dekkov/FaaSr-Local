@@ -1,0 +1,15 @@
+{
+  "FunctionInvoke": 123,
+  "ActionList": {
+    "create": {
+      "FunctionName": "create_sample_data",
+      "Arguments": {
+        "folder": "demo",
+        "output1": "df1.csv",
+        "output2": "df2.csv"
+      },
+      "InvokeNext": ["compute(folder=demo,input1=df1.csv,input2=df2.csv,output=out.csv)"]
+    }
+  }
+}
+
