@@ -2,9 +2,7 @@
 #' These mirror the signatures but operate on a local workspace folder.
 #' The workspace root is 'faasr_data'; files live under 'faasr_data/files'.
 #' Logs live under 'faasr_data/logs'.
-#'
-#' For simplicity, server_name is ignored; remote paths are relative under files/.
-#' All functions are no-ops for cloud and only touch local disk.
+
 
 .fa_local_root <- function() {
   env_root <- Sys.getenv("FAASR_DATA_ROOT", unset = "")
@@ -96,7 +94,3 @@ faasr_log <- function(log_message) {
   cat(sprintf("[%s] %s\n", ts, log_message), file = logfile, append = TRUE)
   invisible(TRUE)
 }
-
-#' Rank helper (sequential local runs => always 1 of 1)
-#' @export
-faasr_rank <- function() list(rank = 1, max_rank = 1)
