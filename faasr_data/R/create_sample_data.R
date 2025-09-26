@@ -26,17 +26,25 @@ create_sample_data <- function(folder, output1, output2) {
   faasr_put_file(local_file="df1.csv", remote_folder=folder, remote_file=output1)
   faasr_put_file(local_file="df2.csv", remote_folder=folder, remote_file=output2)
 
-  # Exercise listing API: list files under the folder prefix after uploads
   listed <- try(faasr_get_folder_list(faasr_prefix=folder), silent=TRUE)
   if (!inherits(listed, "try-error")) {
-    faasr_log(paste0("Listing after upload (", folder, "): ", paste(listed, collapse=", ")))
+    faasr_log(paste0("Listing after put files (", folder, "): ", paste(listed, collapse=", ")))
   }
 
   # Exercise delete API safely: create a probe file, upload, then delete it
-  writeLines("probe", "probe.tmp")
-  faasr_put_file(local_file="probe.tmp", remote_folder=folder, remote_file="probe.tmp")
-  faasr_delete_file(remote_folder=folder, remote_file="probe.tmp")
-  unlink("probe.tmp")
+  writeLines("test", "test.txt")
+  faasr_put_file(local_file="test.txt", remote_folder=folder, remote_file="test.txt")
+  listed <- try(faasr_get_folder_list(faasr_prefix=folder), silent=TRUE)
+  if (!inherits(listed, "try-error")) {
+    faasr_log(paste0("Listing after create test file (", folder, "): ", paste(listed, collapse=", ")))
+  }
+
+  faasr_delete_file(remote_folder=folder, remote_file="test.txt")
+  listed <- try(faasr_get_folder_list(faasr_prefix=folder), silent=TRUE)
+  if (!inherits(listed, "try-error")) {
+    faasr_log(paste0("Listing after delete test file (", folder, "): ", paste(listed, collapse=", ")))
+  }
+  unlink("test.txt")
 
   # Print a log message
   # 

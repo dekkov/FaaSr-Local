@@ -31,7 +31,6 @@ compute_sum <- function(folder, input1, input2, output) {
   if (!inherits(listed, "try-error")) {
     faasr_log(paste0("Listing after compute (", folder, "): ", paste(listed, collapse=", ")))
   }
-  faasr_get_file(remote_folder=folder, remote_file=output, local_file="output_copy.csv")
 
   # Print a log message
   # 
