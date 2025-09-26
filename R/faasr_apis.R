@@ -28,8 +28,6 @@
 }
 
 #' Put (upload) a file to local storage
-#' Matches original faasr signature, but writes to local files/ store.
-#' @export
 faasr_put_file <- function(server_name = NULL, local_folder = ".", local_file,
                            remote_folder = "", remote_file) {
   # Clean inputs
@@ -48,8 +46,6 @@ faasr_put_file <- function(server_name = NULL, local_folder = ".", local_file,
 }
 
 #' Get (download) a file from local storage
-#' Matches original faasr signature, but reads from local files/ store.
-#' @export
 faasr_get_file <- function(server_name = NULL, remote_folder = "", remote_file,
                            local_folder = ".", local_file) {
   remote_folder <- sub("^/+", "", sub("/+$", "", remote_folder))
@@ -67,8 +63,6 @@ faasr_get_file <- function(server_name = NULL, remote_folder = "", remote_file,
 }
 
 #' Delete a file from local storage
-#' Matches original faasr signature, but deletes in local files/ store.
-#' @export
 faasr_delete_file <- function(server_name = NULL, remote_folder = "", remote_file) {
   remote_folder <- sub("^/+", "", sub("/+$", "", remote_folder))
   src_dir <- if (nzchar(remote_folder)) file.path(.fa_files_root(), remote_folder) else .fa_files_root()
@@ -78,7 +72,6 @@ faasr_delete_file <- function(server_name = NULL, remote_folder = "", remote_fil
 }
 
 #' List files in local storage with optional prefix
-#' @export
 faasr_get_folder_list <- function(server_name = NULL, faasr_prefix = "") {
   files <- list.files(.fa_files_root(), recursive = TRUE, all.files = FALSE)
   files <- files[!dir.exists(file.path(.fa_files_root(), files))]
@@ -87,7 +80,6 @@ faasr_get_folder_list <- function(server_name = NULL, faasr_prefix = "") {
 }
 
 #' Append a log message to local logs
-#' @export
 faasr_log <- function(log_message) {
   ts <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
   logfile <- file.path(.fa_logs_root(), paste0("faasr_", format(Sys.time(), "%Y%m%d"), ".log"))

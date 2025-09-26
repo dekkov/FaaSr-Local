@@ -16,8 +16,8 @@ faasr_test <- function(json_path) {
   if (is.null(wf$FunctionInvoke)) stop("Invalid workflow JSON: missing FunctionInvoke")
   
 
-  # Source user R files from faasr_data/R
-  src_dirs <- c(file.path("faasr_data", "R"))
+  # Source user and local API R files
+  src_dirs <- c(file.path("faasr_data", "R"), "R")
   for (d in src_dirs) {
     if (dir.exists(d)) {
       rfiles <- list.files(d, pattern = "\\.R$", full.names = TRUE)
@@ -35,6 +35,8 @@ faasr_test <- function(json_path) {
   faasr_data_wd <- file.path(getwd(), "faasr_data")
   if (!dir.exists(faasr_data_wd)) dir.create(faasr_data_wd, recursive = TRUE)
   temp_dir <- file.path(faasr_data_wd, "temp")
+  # Clean temp at start to avoid stale .done files affecting gating
+  if (dir.exists(temp_dir)) unlink(temp_dir, recursive = TRUE)
   state_dir <- file.path(temp_dir, "faasr_state_info")
   files_dir <- file.path(faasr_data_wd, "files")
   if (!dir.exists(temp_dir)) dir.create(temp_dir, recursive = TRUE)
@@ -80,18 +82,24 @@ faasr_test <- function(json_path) {
     if (!identical(cfg, TRUE)) {
       stop(cfg)
     }
-    # Local R execution with original-style working directory and state marker
+    
+    # Check if the function exists
     if (!exists(func_name, mode = "function", envir = .GlobalEnv)) {
       stop(sprintf("Function not found in environment: %s (node %s)", func_name, name))
     }
+
+    # Create a temporary directory for the function
     run_dir <- file.path(temp_dir, name)
     if (!dir.exists(run_dir)) dir.create(run_dir, recursive = TRUE)
     orig_wd <- getwd()
+
+    # Set the working directory to the temporary directory
     on.exit(setwd(orig_wd), add = TRUE)
     # Fix the data root so faasr_* uses faasr_data/files regardless of WD
     Sys.setenv(FAASR_DATA_ROOT = faasr_data_wd)
     setwd(run_dir)
 
+    # Get the function and execute it
     f <- get(func_name, envir = .GlobalEnv)
     res <- try(do.call(f, args), silent = TRUE)
     if (inherits(res, "try-error")) {
@@ -148,10 +156,10 @@ faasr_configuration_check <- function(faasr, state_dir) {
     }
   }
 
-  # Workflow cycle and reachability check (DFS on ActionList graph)
+  # Workflow cycle check (DFS on ActionList graph)
   graph_ok <- try(.faasr_check_workflow_cycle_local(faasr, faasr$FunctionInvoke), silent = TRUE)
   if (inherits(graph_ok, "try-error")) {
-    return("cycle/unreachable faasr_state_info errors")
+    return("cycle errors")
   }
 
   TRUE
@@ -220,7 +228,7 @@ faasr_predecessor_gate <- function(action_list, current_func, state_dir) {
   adj
 }
 
-# Detect cycles and unreachable nodes starting from FunctionInvoke
+# Detect cycles starting from FunctionInvoke
 .faasr_check_workflow_cycle_local <- function(faasr, start_node) {
   action_list <- faasr$ActionList
   if (is.null(action_list) || !length(action_list)) {
@@ -260,14 +268,6 @@ faasr_predecessor_gate <- function(action_list, current_func, state_dir) {
 
   if (is_cyclic(start_node)) {
     stop("cycle detected")
-  }
-
-  # reachability: ensure all nodes are visited
-  all_nodes <- names(action_list)
-  visited_nodes <- ls(visited)
-  unreachable <- setdiff(all_nodes, visited_nodes)
-  if (length(unreachable)) {
-    stop(sprintf("unreachable actions: %s", paste(unreachable, collapse = ", ")))
   }
 
   TRUE
