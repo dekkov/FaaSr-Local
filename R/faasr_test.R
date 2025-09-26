@@ -70,18 +70,17 @@ faasr_test <- function(json_path) {
     func_name <- node$FunctionName
     args <- node$Arguments %||% list()
 
-    #Print the function name and arguments
-    cli::cli_h2(sprintf("Running %s (%s)", name, func_name))
-
-    # Predecessor gating prior to execution
+    # Predecessor gating prior to execution (silently skip until ready)
     cfg <- faasr_predecessor_gate(wf$ActionList, name, state_dir)
     if (identical(cfg, "next")) {
-      cli::cli_alert_info("Skipping execution; waiting for predecessors")
       next
     }
     if (!identical(cfg, TRUE)) {
       stop(cfg)
     }
+
+    #Print the function name and arguments (after gating passes)
+    cli::cli_h2(sprintf("Running %s (%s)", name, func_name))
     
     # Check if the function exists
     if (!exists(func_name, mode = "function", envir = .GlobalEnv)) {
