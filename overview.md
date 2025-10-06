@@ -1,4 +1,4 @@
-## faasr_test.R — Detailed Walkthrough
+## faasr_test.R — Code Walkthrough
 
 ### Overview
 - Purpose: Load a FaaSr workflow JSON and execute functions in InvokeNext order locally.
@@ -11,6 +11,8 @@
   - **Invocation ID**: Generates and exposes workflow invocation ID via `faasr_invocation_id()`.
   - **Conditional branching**: Supports `{True: [...], False: [...]}` branches based on function return values.
   - **Clean state**: Clears temp and files directories at start to avoid stale artifacts.
+
+> **For detailed algorithm explanations** (DFS cycle detection, parsing, predecessor gating), see [algorithms.md](algorithms.md).
 
 ### 1) Setup and JSON loading
 Reads the workflow JSON into `wf` and validates required fields.
@@ -51,32 +53,16 @@ invocation_id <- .faasr_generate_invocation_id(wf)
 assign("FAASR_INVOCATION_ID", invocation_id, envir = .GlobalEnv)
 ```
 
-The invocation ID generator:
-```r
-.faasr_generate_invocation_id <- function(wf) {
-  # Check if InvocationID is already set in the workflow
-  if (!is.null(wf$InvocationID) && nzchar(wf$InvocationID)) {
-    return(wf$InvocationID)
-  }
-  
-  # Check if InvocationIDFromDate format is specified
-  if (!is.null(wf$InvocationIDFromDate) && nzchar(wf$InvocationIDFromDate)) {
-    date_format <- wf$InvocationIDFromDate
-    return(format(Sys.time(), date_format))
-  }
-  
-  # Default: generate a UUID-like ID
-  paste0(format(Sys.time(), "%Y%m%d%H%M%S"), "-", 
-         paste(sample(c(0:9, letters[1:6]), 8, replace = TRUE), collapse = ""))
-}
-```
+The invocation ID generator follows this priority:
+1. Use `InvocationID` from workflow JSON if set
+2. Use `InvocationIDFromDate` format if specified (e.g., `"%Y%m%d%H%M"`)
+3. Default: timestamp + random hex string
 
 ### 4) Queue and working directories
 Initializes a queue with rank-aware items: each item is `list(name, rank_current, rank_max)`.
 
 ```r
 # Build a simple queue for the functions in the workflow
-# Each item is a list with: name, rank_current, rank_max
 queue <- list(list(name = wf$FunctionInvoke, rank_current = 1, rank_max = 1))
 
 faasr_data_wd <- file.path(getwd(), "faasr_data")
@@ -92,6 +78,11 @@ if (!dir.exists(temp_dir)) dir.create(temp_dir, recursive = TRUE)
 if (!dir.exists(state_dir)) dir.create(state_dir, recursive = TRUE)
 if (!dir.exists(files_dir)) dir.create(files_dir, recursive = TRUE)
 ```
+
+**Directory structure:**
+- `faasr_data/temp/` — Per-function working directories
+- `faasr_data/temp/faasr_state_info/` — `.done` marker files
+- `faasr_data/files/` — Shared data files
 
 ### 5) Clean files directory
 Removes all previous outputs to ensure clean runs.
@@ -112,8 +103,8 @@ if (!inherits(files_to_remove, "try-error") && length(files_to_remove)) {
 }
 ```
 
-### 6) Schema handling and one-time global validation
-Downloads a fallback schema if needed, then validates the workflow once for JSON schema and graph correctness (cycles).
+### 6) Schema validation and cycle detection
+One-time validation checks JSON schema and detects workflow cycles.
 
 ```r
 schema_repo_path <- file.path(getwd(), "schema.json")
@@ -127,75 +118,39 @@ cfg_once <- faasr_configuration_check(wf, state_dir)
 if (!identical(cfg_once, TRUE)) stop(cfg_once)
 ```
 
-What `faasr_configuration_check` does:
-
-```r
-faasr_configuration_check <- function(faasr, state_dir) {
-  # Basic JSON sanity
-  if (is.null(faasr$ActionList) || is.null(faasr$FunctionInvoke)) {
-    return("JSON parsing error")
-  }
-
-  # JSON schema validation (prefers ./schema.json, falls back to temp)
-  schema_file <- file.path(getwd(), "schema.json")
-  if (!file.exists(schema_file)) {
-    temp_dir <- dirname(state_dir)
-    cand <- file.path(temp_dir, "FaaSr.schema.json")
-    if (file.exists(cand)) schema_file <- cand
-  }
-  if (file.exists(schema_file) && requireNamespace("jsonvalidate", quietly = TRUE)) {
-    json_txt <- try(jsonlite::toJSON(faasr, auto_unbox = TRUE), silent = TRUE)
-    if (!inherits(json_txt, "try-error")) {
-      ok <- try(jsonvalidate::json_validate(json = json_txt, schema = schema_file), silent = TRUE)
-      if (!inherits(ok, "try-error") && isFALSE(ok)) {
-        return("JSON parsing error")
-      }
-    }
-  }
-
-  # Workflow cycle check (DFS on ActionList graph)
-  graph_ok <- try(.faasr_check_workflow_cycle_local(faasr, faasr$FunctionInvoke), silent = TRUE)
-  if (inherits(graph_ok, "try-error")) {
-    return("cycle errors")
-  }
-
-  TRUE
-}
-```
+**What `faasr_configuration_check` does:**
+1. Validates basic JSON structure (ActionList, FunctionInvoke)
+2. JSON schema validation (if jsonvalidate package available)
+3. **Cycle detection** via DFS traversal (see [algorithms.md](algorithms.md#cycle-detection))
 
 ### 7) Main execution loop
-Dequeues nodes with rank information, enforces predecessor gating, then executes the user function in an isolated directory.
+The core workflow engine that processes functions from the queue one by one.
 
 ```r
 visited <- character()
 while (length(queue) > 0) {
-  # Get the next function in the queue
+  # Dequeue next function with rank info
   queue_item <- queue[[1]]; queue <- queue[-1]
   name <- queue_item$name
   rank_current <- queue_item$rank_current
   rank_max <- queue_item$rank_max
   
-  # Create unique visited key including rank
+  # Skip if already executed
   visited_key <- paste0(name, "_rank_", rank_current, "/", rank_max)
   if (visited_key %in% visited) next
   
   node <- wf$ActionList[[name]]
   if (is.null(node)) next
 
-  # Get the function name and arguments
   func_name <- node$FunctionName
   args <- node$Arguments %||% list()
 
-  # Predecessor gating prior to execution (skip until ready)
+  # Predecessor gating: wait for all unconditional predecessors
   cfg <- faasr_predecessor_gate(wf$ActionList, name, state_dir)
-  if (identical(cfg, "next")) {
-    next
-  }
-  if (!identical(cfg, TRUE)) {
-    stop(cfg)
-  }
+  if (identical(cfg, "next")) next  # Not ready yet, skip
+  if (!identical(cfg, TRUE)) stop(cfg)
 
-  # Set rank info in global environment before execution
+  # Set rank context for user functions
   if (rank_max > 1) {
     rank_info <- paste0(rank_current, "/", rank_max)
     assign("FAASR_CURRENT_RANK_INFO", rank_info, envir = .GlobalEnv)
@@ -205,23 +160,20 @@ while (length(queue) > 0) {
     cli::cli_h2(sprintf("Running %s (%s)", name, func_name))
   }
   
-  # Check if the function exists
+  # Validate function exists
   if (!exists(func_name, mode = "function", envir = .GlobalEnv)) {
     stop(sprintf("Function not found in environment: %s (node %s)", func_name, name))
   }
 
-  # Create a temporary directory for the function
+  # Create isolated working directory
   run_dir <- file.path(temp_dir, name)
   if (!dir.exists(run_dir)) dir.create(run_dir, recursive = TRUE)
   orig_wd <- getwd()
-
-  # Set the working directory to the temporary directory
   on.exit(setwd(orig_wd), add = TRUE)
-  # Fix the data root so faasr_* uses faasr_data/files regardless of WD
   Sys.setenv(FAASR_DATA_ROOT = faasr_data_wd)
   setwd(run_dir)
 
-  # Get the function and execute it
+  # Execute function
   f <- get(func_name, envir = .GlobalEnv)
   res <- try(do.call(f, args), silent = TRUE)
   if (inherits(res, "try-error")) {
@@ -229,33 +181,38 @@ while (length(queue) > 0) {
     stop(sprintf("Error executing %s", func_name))
   }
   
-  # Mark success similar to package's .done files (only once per function name, not per rank)
+  # Mark completion (only after final rank)
   if (rank_current == rank_max) {
-    utils::write.table("TRUE", file = file.path(state_dir, paste0(name, ".done")), row.names = FALSE, col.names = FALSE)
+    utils::write.table("TRUE", file = file.path(state_dir, paste0(name, ".done")), 
+                       row.names = FALSE, col.names = FALSE)
   }
 
   visited <- c(visited, visited_key)
   
-  # Enqueue next functions (only from the last rank to avoid duplicates)
+  # Enqueue successors (only from final rank)
   if (rank_current == rank_max) {
     nexts <- node$InvokeNext %||% list()
-    # flatten possible list
     if (is.character(nexts)) nexts <- as.list(nexts)
+    
     for (nx in nexts) {
       if (is.character(nx)) {
-        # Parse the string to extract rank notation
+        # Simple successor: "funcB" or "funcB(3)"
         parsed <- .faasr_parse_invoke_next_string(nx)
         for (r in 1:parsed$rank) {
-          queue <- c(queue, list(list(name = parsed$func_name, rank_current = r, rank_max = parsed$rank)))
+          queue <- c(queue, list(list(name = parsed$func_name, 
+                                      rank_current = r, rank_max = parsed$rank)))
         }
       } else if (is.list(nx)) {
-        # if conditional object {True:[], False:[]},
-        branch <- if (isTRUE(res) && !is.null(nx$True)) nx$True else if (identical(res, FALSE) && !is.null(nx$False)) nx$False else NULL
+        # Conditional branching: {True: [...], False: [...]}
+        branch <- if (isTRUE(res) && !is.null(nx$True)) nx$True 
+                  else if (identical(res, FALSE) && !is.null(nx$False)) nx$False 
+                  else NULL
         if (is.null(branch)) next
         for (b in branch) {
           parsed <- .faasr_parse_invoke_next_string(b)
           for (r in 1:parsed$rank) {
-            queue <- c(queue, list(list(name = parsed$func_name, rank_current = r, rank_max = parsed$rank)))
+            queue <- c(queue, list(list(name = parsed$func_name, 
+                                        rank_current = r, rank_max = parsed$rank)))
           }
         }
       }
@@ -267,58 +224,63 @@ cli::cli_alert_success("Workflow completed (R-only, sequential)")
 TRUE
 ```
 
-### 8) Helper: Null-coalescing operator
-Convenience to default NULL to a value.
+**Key steps:**
+1. **Dequeue** with rank info
+2. **Check visited** to prevent re-execution
+3. **Predecessor gating** waits for unconditional parents
+4. **Set rank context** for `faasr_rank()` API
+5. **Isolated execution** in per-function directory
+6. **Capture result** for conditional branching
+7. **Mark completion** via `.done` file
+8. **Enqueue successors** with rank expansion and conditional branching
 
+> See [algorithms.md](algorithms.md#main-execution-loop) for detailed breakdown.
+
+### 8) Helper functions
+
+#### Null-coalescing operator
 ```r
 `%||%` <- function(x, y) if (is.null(x)) y else x
 ```
 
-### 9) Helper: Parse InvokeNext strings
-Extracts function name and rank from strings like "FuncName" or "FuncName(3)".
+#### Parse InvokeNext strings
+Extracts function name and rank from `"FuncName"` or `"FuncName(N)"`.
 
 ```r
 .faasr_parse_invoke_next_string <- function(invoke_string) {
   s <- trimws(invoke_string)
-
-  # Reject any bracketed conditions or unsupported syntax
   if (grepl("\\[|\\]", s)) {
     stop("Invalid InvokeNext format: only 'FuncName' and 'FuncName(N)' are supported")
   }
-
-  # Match optional (N) at the end; capture name and digits
   m <- regexec("^(.*?)(?:\\((\\d+)\\))?$", s)
   mm_all <- regmatches(s, m)
   if (!length(mm_all) || length(mm_all[[1]]) != 3) {
     stop("Invalid InvokeNext format")
   }
   mm <- mm_all[[1]]
-
   func_name <- trimws(mm[2])
   if (!nzchar(func_name)) {
     stop("Invalid InvokeNext: empty function name")
   }
-
   rank <- 1
   if (nzchar(mm[3])) {
     rank <- as.integer(mm[3])
   }
-
   list(func_name = func_name, condition = NULL, rank = rank)
 }
 ```
 
-### 10) Helper: Predecessor discovery and gating
-Finds predecessors of a node by scanning all `InvokeNext` values. Gating only enforces **unconditional** predecessors to avoid blocking on unexecuted conditional branches.
+> See [algorithms.md](algorithms.md#parsing-invokenext-strings) for regex breakdown.
+
+#### Predecessor discovery and gating
+Finds predecessors and enforces synchronization for functions with multiple unconditional parents.
 
 ```r
 .faasr_find_predecessors <- function(action_list, target_func, unconditional_only = FALSE) {
   preds <- character()
   for (nm in names(action_list)) {
     nx <- action_list[[nm]]$InvokeNext %||% list()
-    # normalize to character vector of names
     next_names <- character()
-    is_conditional <- FALSE
     if (is.character(nx)) {
       next_names <- sub("\\(.*$", "", nx)
     } else if (is.list(nx)) {
@@ -326,8 +288,6 @@ Finds predecessors of a node by scanning all `InvokeNext` values. Gating only en
         if (is.character(item)) {
           next_names <- c(next_names, sub("\\(.*$", "", item))
         } else if (is.list(item)) {
-          # This is a conditional branch
-          is_conditional <- TRUE
           if (!unconditional_only) {
             if (!is.null(item$True)) next_names <- c(next_names, sub("\\(.*$", "", unlist(item$True)))
             if (!is.null(item$False)) next_names <- c(next_names, sub("\\(.*$", "", unlist(item$False)))
@@ -342,10 +302,7 @@ Finds predecessors of a node by scanning all `InvokeNext` values. Gating only en
   unique(preds)
 }
 
-# Predecessor gating: if multiple UNCONDITIONAL predecessors, require all .done present
-# Conditional branches are handled by the branching logic itself, not gating
 faasr_predecessor_gate <- function(action_list, current_func, state_dir) {
-  # Only gate on unconditional predecessors to avoid blocking on unexecuted conditional branches
   predecessors <- .faasr_find_predecessors(action_list, current_func, unconditional_only = TRUE)
   if (length(predecessors) > 1) {
     done_list <- try(list.files(state_dir), silent = TRUE)
@@ -360,10 +317,12 @@ faasr_predecessor_gate <- function(action_list, current_func, state_dir) {
 }
 ```
 
-**Key insight**: When a function appears in a conditional branch (`{True: [...], False: [...]}`), we don't enforce predecessor gating because only one branch will execute. The branching logic handles which path to take based on the return value.
+**Key insight:** Only gates on **unconditional** predecessors to avoid deadlocks from unexecuted conditional branches.
 
-### 11) Helper: Build adjacency list and cycle detection
-Builds a graph from the workflow and detects cycles via DFS.
+> See [algorithms.md](algorithms.md#predecessor-gating) for detailed explanation with examples.
+
+#### Cycle detection
+Builds workflow graph and detects cycles via DFS.
 
 ```r
 .faasr_build_adjacency <- function(action_list) {
@@ -390,15 +349,7 @@ Builds a graph from the workflow and detects cycles via DFS.
 
 .faasr_check_workflow_cycle_local <- function(faasr, start_node) {
   action_list <- faasr$ActionList
-  if (is.null(action_list) || !length(action_list)) {
-    stop("invalid action list")
-  }
-  if (is.null(start_node) || !nzchar(start_node) || !(start_node %in% names(action_list))) {
-    stop("invalid start node")
-  }
-
   adj <- .faasr_build_adjacency(action_list)
-
   visited <- new.env(parent = emptyenv())
   stack <- new.env(parent = emptyenv())
 
@@ -428,49 +379,62 @@ Builds a graph from the workflow and detects cycles via DFS.
   if (is_cyclic(start_node)) {
     stop("cycle detected")
   }
-
   TRUE
+}
+```
+
+**Algorithm:** Depth-First Search (DFS) with two tracking structures:
+- `visited`: All explored nodes
+- `stack`: Current recursion path (detects back edges = cycles)
+
+> See [algorithms.md](algorithms.md#cycle-detection) for complete DFS walkthrough.
+
+#### Generate invocation ID
+```r
+.faasr_generate_invocation_id <- function(wf) {
+  if (!is.null(wf$InvocationID) && nzchar(wf$InvocationID)) {
+    return(wf$InvocationID)
+  }
+  if (!is.null(wf$InvocationIDFromDate) && nzchar(wf$InvocationIDFromDate)) {
+    date_format <- wf$InvocationIDFromDate
+    return(format(Sys.time(), date_format))
+  }
+  paste0(format(Sys.time(), "%Y%m%d%H%M%S"), "-", 
+         paste(sample(c(0:9, letters[1:6]), 8, replace = TRUE), collapse = ""))
 }
 ```
 
 ### Key Features Summary
 
 #### 1. Rank Support
-- Functions can specify parallel execution with `FuncName(N)` notation
-- Each rank (1 to N) is enqueued and executed separately
-- `FAASR_CURRENT_RANK_INFO` is set for each rank execution
-- Accessible via `faasr_rank()` which returns `list(Rank = "1", MaxRank = "3")`
-- `.done` file is written only after the final rank completes
+- Parallel execution via `FuncName(N)` notation
+- Each rank (1 to N) executed separately
+- `faasr_rank()` returns `list(Rank = "2", MaxRank = "3")`
+- `.done` file written only after final rank completes
 
 #### 2. Conditional Branching
-- `InvokeNext` can contain `{True: [...], False: [...]}` objects
-- Functions must return exactly `TRUE` or `FALSE` for branching
-- Branch selection uses `isTRUE(res)` for True path, `identical(res, FALSE)` for False path
-- Only the selected branch is enqueued
+- `{True: [...], False: [...]}` in InvokeNext
+- Function must return exactly `TRUE` or `FALSE`
+- Only selected branch is enqueued
 
 #### 3. Invocation ID
-- Generated at workflow start via `.faasr_generate_invocation_id()`
-- Respects `InvocationID` if set in JSON
-- Uses `InvocationIDFromDate` format if specified (e.g., `"%Y%m%d%H%M"`)
-- Defaults to timestamp + random hex string
 - Accessible via `faasr_invocation_id()`
+- Respects JSON configuration or generates timestamp-based ID
 
 #### 4. Predecessor Gating
-- Only enforces gating on **unconditional** predecessors
-- Conditional branches don't block successors (handled by branching logic)
-- Prevents deadlocks when functions appear in multiple conditional paths
+- Enforces synchronization for multiple unconditional predecessors
+- Avoids deadlocks from conditional branches
+- Uses `.done` marker files
 
 #### 5. Clean State
-- `temp/` directory is cleared at start (removes stale `.done` files)
-- `files/` directory is cleared at start (removes previous outputs)
-- Preserves `.gitkeep` files
+- Clears `temp/` and `files/` at startup
+- Isolated per-function working directories
 
 ### R Tips (for newcomers)
-- **Vectors and lists**: `c(...)` concatenates vectors; `list(...)` builds heterogeneous containers.
-- **Queue operations**: `queue[[1]]` gets first item; `queue[-1]` returns all but first.
-- **Name resolution and calls**: `exists(name, mode="function", envir=.GlobalEnv)`, `get(name, envir=.GlobalEnv)`, `do.call(func, args)`.
-- **Errors**: `try(expr, silent=TRUE)` captures errors as values; check with `inherits(x, "try-error")`.
-- **Working directory safety**: `orig <- getwd(); on.exit(setwd(orig), add=TRUE)` ensures cleanup.
-- **File markers**: writing `<node>.done` files allows cheap cross-step synchronization.
-- **Environment variables**: `Sys.setenv(VAR = value)` sets env vars; `Sys.getenv("VAR", unset = "")` reads them.
-- **Global state**: `assign(name, value, envir = .GlobalEnv)` sets globals; `get0(name, envir = .GlobalEnv, ifnotfound = NULL)` reads them.
+- **Lists**: `list(a=1, b=2)` creates named list; `list[[1]]` extracts first element
+- **Queue operations**: `queue[[1]]` gets head; `queue[-1]` returns tail
+- **Dynamic calls**: `get("func_name", envir=.GlobalEnv)` retrieves function by name; `do.call(f, args)` calls it
+- **Error handling**: `try(expr, silent=TRUE)` captures errors; `inherits(x, "try-error")` checks for errors
+- **Environments**: `assign(name, value, envir=.GlobalEnv)` sets globals; `get0(name, envir, ifnotfound=NULL)` reads them
+- **Regex**: `regexec()` finds pattern matches; `regmatches()` extracts matched strings
+- **Working directory**: `on.exit(setwd(orig), add=TRUE)` ensures cleanup on function exit
