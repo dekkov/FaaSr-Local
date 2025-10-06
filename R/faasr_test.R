@@ -27,9 +27,12 @@ faasr_test <- function(json_path) {
     }
   }
 
-  # Build a simple queue for the functions in the workflow
+  # Initialize global environment for rank info
+  assign("FAASR_CURRENT_RANK_INFO", NULL, envir = .GlobalEnv)
 
-  queue <- c(wf$FunctionInvoke)
+  # Build a simple queue for the functions in the workflow
+  # Queue items are now lists with: name, rank_current, rank_max
+  queue <- list(list(name = wf$FunctionInvoke, rank_current = 1, rank_max = 1))
 
   # Prepare faasr_data folders to mirror original output structure
   faasr_data_wd <- file.path(getwd(), "faasr_data")
@@ -61,8 +64,15 @@ faasr_test <- function(json_path) {
   while (length(queue) > 0) {
 
     #Get the next function in the queue
-    name <- queue[1]; queue <- queue[-1]
-    if (name %in% visited) next
+    queue_item <- queue[[1]]; queue <- queue[-1]
+    name <- queue_item$name
+    rank_current <- queue_item$rank_current
+    rank_max <- queue_item$rank_max
+    
+    # Create unique visited key including rank
+    visited_key <- paste0(name, "_rank_", rank_current, "/", rank_max)
+    if (visited_key %in% visited) next
+    
     node <- wf$ActionList[[name]]
     if (is.null(node)) next
 
@@ -79,8 +89,15 @@ faasr_test <- function(json_path) {
       stop(cfg)
     }
 
-    #Print the function name and arguments (after gating passes)
-    cli::cli_h2(sprintf("Running %s (%s)", name, func_name))
+    # Set rank info in global environment before execution
+    if (rank_max > 1) {
+      rank_info <- paste0(rank_current, "/", rank_max)
+      assign("FAASR_CURRENT_RANK_INFO", rank_info, envir = .GlobalEnv)
+      cli::cli_h2(sprintf("Running %s (%s) - Rank %s", name, func_name, rank_info))
+    } else {
+      assign("FAASR_CURRENT_RANK_INFO", NULL, envir = .GlobalEnv)
+      cli::cli_h2(sprintf("Running %s (%s)", name, func_name))
+    }
     
     # Check if the function exists
     if (!exists(func_name, mode = "function", envir = .GlobalEnv)) {
@@ -105,22 +122,37 @@ faasr_test <- function(json_path) {
       cli::cli_alert_danger(as.character(res))
       stop(sprintf("Error executing %s", func_name))
     }
-    # Mark success similar to package's .done files
-    utils::write.table("TRUE", file = file.path(state_dir, paste0(name, ".done")), row.names = FALSE, col.names = FALSE)
+    
+    # Mark success similar to package's .done files (only once per function name, not per rank)
+    if (rank_current == rank_max) {
+      utils::write.table("TRUE", file = file.path(state_dir, paste0(name, ".done")), row.names = FALSE, col.names = FALSE)
+    }
 
-    visited <- c(visited, name)
-    # enqueue next
-    nexts <- node$InvokeNext %||% list()
-    # flatten possible list
-    if (is.character(nexts)) nexts <- as.list(nexts)
-    for (nx in nexts) {
-      if (is.character(nx)) {
-        queue <- c(queue, sub("\\(.*$", "", nx))
-      } else if (is.list(nx)) {
-        # if conditional object {True:[], False:[]}, default to True path when res is TRUE
-        branch <- if (isTRUE(res) && !is.null(nx$True)) nx$True else if (identical(res, FALSE) && !is.null(nx$False)) nx$False else NULL
-        if (is.null(branch)) next
-        for (b in branch) queue <- c(queue, sub("\\(.*$", "", b))
+    visited <- c(visited, visited_key)
+    
+    # Enqueue next functions (only from the last rank to avoid duplicates)
+    if (rank_current == rank_max) {
+      nexts <- node$InvokeNext %||% list()
+      # flatten possible list
+      if (is.character(nexts)) nexts <- as.list(nexts)
+      for (nx in nexts) {
+        if (is.character(nx)) {
+          # Parse the string to extract rank notation
+          parsed <- .faasr_parse_invoke_next_string(nx)
+          for (r in 1:parsed$rank) {
+            queue <- c(queue, list(list(name = parsed$func_name, rank_current = r, rank_max = parsed$rank)))
+          }
+        } else if (is.list(nx)) {
+          # if conditional object {True:[], False:[]}, default to True path when res is TRUE
+          branch <- if (isTRUE(res) && !is.null(nx$True)) nx$True else if (identical(res, FALSE) && !is.null(nx$False)) nx$False else NULL
+          if (is.null(branch)) next
+          for (b in branch) {
+            parsed <- .faasr_parse_invoke_next_string(b)
+            for (r in 1:parsed$rank) {
+              queue <- c(queue, list(list(name = parsed$func_name, rank_current = r, rank_max = parsed$rank)))
+            }
+          }
+        }
       }
     }
   }
@@ -270,4 +302,48 @@ faasr_predecessor_gate <- function(action_list, current_func, state_dir) {
   }
 
   TRUE
+}
+
+# Parse InvokeNext string to extract function name, condition, and rank
+# Supports formats: "FuncName", "FuncName[TRUE]", "FuncName[FALSE]", "FuncName(rank)", "FuncName[TRUE](rank)"
+.faasr_parse_invoke_next_string <- function(invoke_string) {
+  
+  result <- list(func_name = NULL,
+    condition = NULL,
+    rank = 1)
+  
+  # First, extract condition from square brackets [TRUE] or [FALSE]
+  condition_match <- regexpr("\\[(TRUE|FALSE)\\]", invoke_string, ignore.case = TRUE)
+  if (condition_match[1] != -1) {
+    # Extract condition value between square brackets
+    condition_str <- regmatches(invoke_string, condition_match)
+    condition_value <- gsub("\\[|\\]", "", condition_str)  # Remove brackets
+    
+    # RESTRICTION: Only allow TRUE or FALSE
+    if (toupper(condition_value) == "TRUE") {
+      result$condition <- TRUE
+    } else if (toupper(condition_value) == "FALSE") {
+      result$condition <- FALSE
+    } else {
+      # ERROR: Invalid condition - only TRUE/FALSE allowed
+      err_msg <- paste0("Invalid condition: [", condition_value, "]. Only [TRUE] and [FALSE] are supported.")
+      stop(err_msg)
+    }
+    
+    # Remove the condition part from the string
+    invoke_string <- gsub("\\[(TRUE|FALSE)\\]", "", invoke_string, ignore.case = TRUE)
+  }
+  
+  # Then, extract rank from parentheses (rank) - existing logic
+  rank_parts <- unlist(strsplit(invoke_string, "[()]"))
+  result$func_name <- rank_parts[1]
+  
+  if (length(rank_parts) > 1) {
+    rank_str <- trimws(rank_parts[2])
+    if (grepl("^[0-9]+$", rank_str)) {
+      result$rank <- as.numeric(rank_str)
+    }
+  }
+  
+  return(result)
 }

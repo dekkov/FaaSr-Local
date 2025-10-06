@@ -86,3 +86,22 @@ faasr_log <- function(log_message) {
   cat(sprintf("[%s] %s\n", ts, log_message), file = logfile, append = TRUE)
   invisible(TRUE)
 }
+
+#' Get current rank information for the executing function
+#' @return List with Rank and MaxRank, or empty list if not running in ranked mode
+#' @export
+faasr_rank <- function() {
+  rank_info <- get0("FAASR_CURRENT_RANK_INFO", envir = .GlobalEnv, inherits = FALSE, ifnotfound = NULL)
+  
+  if (is.null(rank_info)) {
+    return(list())
+  }
+  
+  # Parse rank_info which is in format "1/3"
+  parts <- unlist(strsplit(rank_info, "[/]"))
+  if (length(parts) == 2) {
+    return(list(Rank = parts[1], MaxRank = parts[2]))
+  }
+  
+  return(list())
+}
