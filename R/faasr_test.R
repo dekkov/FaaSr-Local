@@ -31,13 +31,14 @@ faasr_test <- function(json_path) {
   assign("FAASR_CURRENT_RANK_INFO", NULL, envir = .GlobalEnv)
 
   # Build a simple queue for the functions in the workflow
-  # Queue items are now lists with: name, rank_current, rank_max
+  # Each item is a list with: name, rank_current, rank_max
   queue <- list(list(name = wf$FunctionInvoke, rank_current = 1, rank_max = 1))
 
-  # Prepare faasr_data folders to mirror original output structure
+  # Prepare faasr_data folders 
   faasr_data_wd <- file.path(getwd(), "faasr_data")
   if (!dir.exists(faasr_data_wd)) dir.create(faasr_data_wd, recursive = TRUE)
   temp_dir <- file.path(faasr_data_wd, "temp")
+  
   # Clean temp at start to avoid stale .done files affecting gating
   if (dir.exists(temp_dir)) unlink(temp_dir, recursive = TRUE)
   state_dir <- file.path(temp_dir, "faasr_state_info")
@@ -45,6 +46,20 @@ faasr_test <- function(json_path) {
   if (!dir.exists(temp_dir)) dir.create(temp_dir, recursive = TRUE)
   if (!dir.exists(state_dir)) dir.create(state_dir, recursive = TRUE)
   if (!dir.exists(files_dir)) dir.create(files_dir, recursive = TRUE)
+  
+  # Clean files outputs at start to avoid stale artifacts between runs
+  files_to_remove <- try(list.files(files_dir,
+    all.files = TRUE,
+    full.names = TRUE,
+    include.dirs = TRUE,
+    recursive = FALSE
+  ), silent = TRUE)
+  if (!inherits(files_to_remove, "try-error") && length(files_to_remove)) {
+    base_names <- basename(files_to_remove)
+    keep <- base_names %in% c(".", "..", ".gitkeep")
+    to_delete <- files_to_remove[!keep]
+    if (length(to_delete)) unlink(to_delete, recursive = TRUE, force = TRUE)
+  }
 
   # Schema path preference: local repo schema.json, else temp schema
   schema_repo_path <- file.path(getwd(), "schema.json")
@@ -80,7 +95,7 @@ faasr_test <- function(json_path) {
     func_name <- node$FunctionName
     args <- node$Arguments %||% list()
 
-    # Predecessor gating prior to execution (silently skip until ready)
+    # Predecessor gating prior to execution 
     cfg <- faasr_predecessor_gate(wf$ActionList, name, state_dir)
     if (identical(cfg, "next")) {
       next
@@ -143,7 +158,7 @@ faasr_test <- function(json_path) {
             queue <- c(queue, list(list(name = parsed$func_name, rank_current = r, rank_max = parsed$rank)))
           }
         } else if (is.list(nx)) {
-          # if conditional object {True:[], False:[]}, default to True path when res is TRUE
+          # if conditional object {True:[], False:[]},
           branch <- if (isTRUE(res) && !is.null(nx$True)) nx$True else if (identical(res, FALSE) && !is.null(nx$False)) nx$False else NULL
           if (is.null(branch)) next
           for (b in branch) {
@@ -304,46 +319,33 @@ faasr_predecessor_gate <- function(action_list, current_func, state_dir) {
   TRUE
 }
 
-# Parse InvokeNext string to extract function name, condition, and rank
-# Supports formats: "FuncName", "FuncName[TRUE]", "FuncName[FALSE]", "FuncName(rank)", "FuncName[TRUE](rank)"
+# Parse InvokeNext string to extract function name and rank
+# Accepted formats only: "FuncName" or "FuncName(N)"
 .faasr_parse_invoke_next_string <- function(invoke_string) {
-  
-  result <- list(func_name = NULL,
-    condition = NULL,
-    rank = 1)
-  
-  # First, extract condition from square brackets [TRUE] or [FALSE]
-  condition_match <- regexpr("\\[(TRUE|FALSE)\\]", invoke_string, ignore.case = TRUE)
-  if (condition_match[1] != -1) {
-    # Extract condition value between square brackets
-    condition_str <- regmatches(invoke_string, condition_match)
-    condition_value <- gsub("\\[|\\]", "", condition_str)  # Remove brackets
-    
-    # RESTRICTION: Only allow TRUE or FALSE
-    if (toupper(condition_value) == "TRUE") {
-      result$condition <- TRUE
-    } else if (toupper(condition_value) == "FALSE") {
-      result$condition <- FALSE
-    } else {
-      # ERROR: Invalid condition - only TRUE/FALSE allowed
-      err_msg <- paste0("Invalid condition: [", condition_value, "]. Only [TRUE] and [FALSE] are supported.")
-      stop(err_msg)
-    }
-    
-    # Remove the condition part from the string
-    invoke_string <- gsub("\\[(TRUE|FALSE)\\]", "", invoke_string, ignore.case = TRUE)
+  s <- trimws(invoke_string)
+
+  # Reject any bracketed conditions or unsupported syntax
+  if (grepl("\\[|\\]", s)) {
+    stop("Invalid InvokeNext format: only 'FuncName' and 'FuncName(N)' are supported")
   }
-  
-  # Then, extract rank from parentheses (rank) - existing logic
-  rank_parts <- unlist(strsplit(invoke_string, "[()]"))
-  result$func_name <- rank_parts[1]
-  
-  if (length(rank_parts) > 1) {
-    rank_str <- trimws(rank_parts[2])
-    if (grepl("^[0-9]+$", rank_str)) {
-      result$rank <- as.numeric(rank_str)
-    }
+
+  # Match optional (N) at the end; capture name and digits
+  m <- regexec("^(.*?)(?:\\((\\d+)\\))?$", s)
+  mm_all <- regmatches(s, m)
+  if (!length(mm_all) || length(mm_all[[1]]) != 3) {
+    stop("Invalid InvokeNext format")
   }
-  
-  return(result)
+  mm <- mm_all[[1]]
+
+  func_name <- trimws(mm[2])
+  if (!nzchar(func_name)) {
+    stop("Invalid InvokeNext: empty function name")
+  }
+
+  rank <- 1
+  if (nzchar(mm[3])) {
+    rank <- as.integer(mm[3])
+  }
+
+  list(func_name = func_name, condition = NULL, rank = rank)
 }

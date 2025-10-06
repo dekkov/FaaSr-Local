@@ -29,7 +29,7 @@
             "output1": "sample1.csv",
             "output2": "sample2.csv"
         },
-        "InvokeNext": ["sum"]
+        "InvokeNext": ["sum(3)"]
       },
       "sum": {
         "FunctionName": "compute_sum",
