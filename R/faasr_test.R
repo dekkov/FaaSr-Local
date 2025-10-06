@@ -29,6 +29,10 @@ faasr_test <- function(json_path) {
 
   # Initialize global environment for rank info
   assign("FAASR_CURRENT_RANK_INFO", NULL, envir = .GlobalEnv)
+  
+  # Generate and set invocation ID
+  invocation_id <- .faasr_generate_invocation_id(wf)
+  assign("FAASR_INVOCATION_ID", invocation_id, envir = .GlobalEnv)
 
   # Build a simple queue for the functions in the workflow
   # Each item is a list with: name, rank_current, rank_max
@@ -355,4 +359,22 @@ faasr_predecessor_gate <- function(action_list, current_func, state_dir) {
   }
 
   list(func_name = func_name, condition = NULL, rank = rank)
+}
+
+# Generate invocation ID based on workflow configuration
+.faasr_generate_invocation_id <- function(wf) {
+  # Check if InvocationID is already set in the workflow
+  if (!is.null(wf$InvocationID) && nzchar(wf$InvocationID)) {
+    return(wf$InvocationID)
+  }
+  
+  # Check if InvocationIDFromDate format is specified
+  if (!is.null(wf$InvocationIDFromDate) && nzchar(wf$InvocationIDFromDate)) {
+    date_format <- wf$InvocationIDFromDate
+    return(format(Sys.time(), date_format))
+  }
+  
+  # Default: generate a UUID-like ID
+  paste0(format(Sys.time(), "%Y%m%d%H%M%S"), "-", 
+         paste(sample(c(0:9, letters[1:6]), 8, replace = TRUE), collapse = ""))
 }

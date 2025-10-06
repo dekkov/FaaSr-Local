@@ -2,13 +2,13 @@
 test_rank_function <- function(message = "Testing rank") {
   # Get rank information
   rank_info <- faasr_rank()
-  
+  invocation_id <- faasr_invocation_id()
   if (length(rank_info) > 0) {
     # Running with rank
-    cat(sprintf("%s - Rank: %s/%s\n", message, rank_info$Rank, rank_info$MaxRank))
+    cat(sprintf("%s - Rank: %s/%s\n", invocation_id, rank_info$Rank, rank_info$MaxRank))
     
     # Create a file specific to this rank
-    filename <- sprintf("rank_%s_of_%s.txt", rank_info$Rank, rank_info$MaxRank)
+    filename <- sprintf("%s_rank_%s_of_%s.txt", invocation_id, rank_info$Rank, rank_info$MaxRank)
     
     # Write the output
     writeLines(

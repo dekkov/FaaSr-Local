@@ -88,8 +88,7 @@ faasr_log <- function(log_message) {
 }
 
 #' Get current rank information for the executing function
-#' @return List with Rank and MaxRank, or empty list if not running in ranked mode
-#' @export
+
 faasr_rank <- function() {
   rank_info <- get0("FAASR_CURRENT_RANK_INFO", envir = .GlobalEnv, inherits = FALSE, ifnotfound = NULL)
   
@@ -104,4 +103,13 @@ faasr_rank <- function() {
   }
   
   return(list())
+}
+
+#' Get the invocation ID for the current workflow
+faasr_invocation_id <- function() {
+  invocation_id <- get0("FAASR_INVOCATION_ID", envir = .GlobalEnv, inherits = FALSE, ifnotfound = NULL)
+  if (is.null(invocation_id)) {
+    return(NULL)
+  }
+  invocation_id
 }

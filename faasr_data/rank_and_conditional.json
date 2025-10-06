@@ -25,7 +25,7 @@
         "FaaSServer": "My_GitHub_Account",
         "Type": "R",
         "Arguments": {
-          "condition": false
+          "condition": true
         },
         "InvokeNext": [
           {"True": ["ranked_function(3)"], "False": ["final_function"]}
@@ -61,7 +61,7 @@
       "test_rank_function": "test/test-repo"
     },
     "FunctionInvoke": "start_function",
-    "InvocationID": "",
+    "InvocationID": "INVOCATION_ID",
     "InvocationIDFromDate": "%Y%m%d%H%M",
     "FaaSrLog": "FaaSrLog",
     "LoggingDataStore": "My_Minio_Bucket",
