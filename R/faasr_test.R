@@ -176,7 +176,7 @@ faasr_test <- function(json_path) {
     }
   }
 
-  cli::cli_alert_success("Workflow completed (R-only, sequential)")
+  cli::cli_alert_success("Workflow completed")
   TRUE
 }
 
@@ -331,7 +331,6 @@ faasr_predecessor_gate <- function(action_list, current_func, state_dir) {
 }
 
 # Parse InvokeNext string to extract function name and rank
-# Accepted formats only: "FuncName" or "FuncName(N)"
 .faasr_parse_invoke_next_string <- function(invoke_string) {
   s <- trimws(invoke_string)
 
