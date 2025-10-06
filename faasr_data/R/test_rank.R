@@ -23,25 +23,7 @@ test_rank_function <- function(message = "Testing rank") {
       remote_folder = "rank_test",
       remote_file = filename
     )
-  } else {
-    # Running without rank
-    cat(sprintf("%s - No rank (single execution)\n", message))
-    
-    # Create a simple file
-    filename <- "no_rank_output.txt"
-    writeLines(
-      sprintf("Executed without rank at %s", Sys.time()),
-      filename
-    )
-    
-    # Upload to storage
-    faasr_put_file(
-      local_folder = ".",
-      local_file = filename,
-      remote_folder = "rank_test",
-      remote_file = filename
-    )
-  }
+  } 
   
   return(TRUE)
 }

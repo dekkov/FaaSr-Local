@@ -211,12 +211,13 @@ faasr_configuration_check <- function(faasr, state_dir) {
   TRUE
 }
 
-.faasr_find_predecessors <- function(action_list, target_func) {
+.faasr_find_predecessors <- function(action_list, target_func, unconditional_only = FALSE) {
   preds <- character()
   for (nm in names(action_list)) {
     nx <- action_list[[nm]]$InvokeNext %||% list()
     # normalize to character vector of names
     next_names <- character()
+    is_conditional <- FALSE
     if (is.character(nx)) {
       next_names <- sub("\\(.*$", "", nx)
     } else if (is.list(nx)) {
@@ -224,8 +225,12 @@ faasr_configuration_check <- function(faasr, state_dir) {
         if (is.character(item)) {
           next_names <- c(next_names, sub("\\(.*$", "", item))
         } else if (is.list(item)) {
-          if (!is.null(item$True)) next_names <- c(next_names, sub("\\(.*$", "", unlist(item$True)))
-          if (!is.null(item$False)) next_names <- c(next_names, sub("\\(.*$", "", unlist(item$False)))
+          # This is a conditional branch
+          is_conditional <- TRUE
+          if (!unconditional_only) {
+            if (!is.null(item$True)) next_names <- c(next_names, sub("\\(.*$", "", unlist(item$True)))
+            if (!is.null(item$False)) next_names <- c(next_names, sub("\\(.*$", "", unlist(item$False)))
+          }
         }
       }
     }
@@ -236,9 +241,11 @@ faasr_configuration_check <- function(faasr, state_dir) {
   unique(preds)
 }
 
-# Predecessor gating: if multiple predecessors, require all .done present
+# Predecessor gating: if multiple UNCONDITIONAL predecessors, require all .done present
+# Conditional branches are handled by the branching logic itself, not gating
 faasr_predecessor_gate <- function(action_list, current_func, state_dir) {
-  predecessors <- .faasr_find_predecessors(action_list, current_func)
+  # Only gate on unconditional predecessors to avoid blocking on unexecuted conditional branches
+  predecessors <- .faasr_find_predecessors(action_list, current_func, unconditional_only = TRUE)
   if (length(predecessors) > 1) {
     done_list <- try(list.files(state_dir), silent = TRUE)
     if (inherits(done_list, "try-error")) done_list <- character()

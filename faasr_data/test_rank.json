@@ -39,7 +39,7 @@
         "message": "Ranked execution"
       },
       "InvokeNext": [
-        "final_function"
+        
       ]
     },
     "final_function": {
