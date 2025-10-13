@@ -24,7 +24,7 @@ faasr_test("my_workflow.json")
 That's it! The function will:
 - Load your workflow JSON
 - Execute all functions in the correct order
-- Handle dependencies and parallel execution
+- Handle Parallel rank execution
 - Show progress in the console
 
 ## Why Use Local Testing?
@@ -41,7 +41,7 @@ That's it! The function will:
 |---------|-------------|
 | **Local Execution** | Run workflows entirely on your machine |
 | **Dependency Management** | Automatically handles function dependencies |
-| **Parallel Support** | Execute multiple ranks with `FunctionName(3)` |
+| **Parallel Rank Support** | Execute multiple ranks with `FunctionName(3)` |
 | **Conditional Branching** | Support for `{True: [...], False: [...]}` logic |
 | **Clean State** | Fresh execution every time |
 | **Progress Tracking** | Real-time console output |
@@ -84,7 +84,7 @@ faasr_data/
 
 ## Advanced Features
 
-### Parallel Execution
+### Parallel Rank Execution
 ```json
 {
   "InvokeNext": ["processData(3)"]
