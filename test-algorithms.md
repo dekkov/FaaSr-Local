@@ -1,8 +1,22 @@
-## Algorithms Explained — Deep Dive into faasr_test.R
+---
+title: "FaaSr Algorithms - Deep Dive"
+permalink: /docs/faasr-algorithms/
+excerpt: "Detailed explanations of the complex algorithms in faasr_test.R including DFS cycle detection, predecessor gating, and parsing logic."
+last_modified_at: 2024-01-15T10:00:00-00:00
+toc: true
+toc_label: "Algorithms"
+toc_icon: "cogs"
+---
 
-This document provides detailed explanations of the complex algorithms in `faasr_test.R`. For the main code walkthrough, see [code_walkthrough.md](code_walkthrough.md).
+# Algorithms Explained — Deep Dive into faasr_test.R
 
-### Table of Contents
+This document provides detailed explanations of the complex algorithms in `faasr_test.R`. For the main code walkthrough, see [overview.md](overview.md).
+
+> **Note:** This document assumes familiarity with the basic workflow execution concepts covered in the main walkthrough.
+{: .notice--info}
+
+## Table of Contents
+
 1. [Main Execution Loop](#main-execution-loop)
 2. [Parsing InvokeNext Strings](#parsing-invokenext-strings)
 3. [Predecessor Gating](#predecessor-gating)
@@ -14,7 +28,7 @@ This document provides detailed explanations of the complex algorithms in `faasr
 
 The main while loop is the workflow engine that processes functions from the queue one by one.
 
-### Step 1: Dequeue and check visited
+### Step 1: Dequeue and Check Visited
 ```r
 queue_item <- queue[[1]]; queue <- queue[-1]
 name <- queue_item$name
@@ -31,7 +45,7 @@ if (visited_key %in% visited) next
 - **Visited tracking**: Creates unique key like `"funcA_rank_1/3"` to prevent re-execution
 - **Why check visited?** Multiple predecessors can enqueue the same function multiple times
 
-### Step 2: Predecessor gating
+### Step 2: Predecessor Gating
 ```r
 cfg <- faasr_predecessor_gate(wf$ActionList, name, state_dir)
 if (identical(cfg, "next")) {
@@ -45,7 +59,7 @@ if (identical(cfg, "next")) {
 - Returns `TRUE` if ready → proceed with execution
 - This handles the "wait until all parents are done" synchronization
 
-### Step 3: Set rank context
+### Step 3: Set Rank Context
 ```r
 if (rank_max > 1) {
   rank_info <- paste0(rank_current, "/", rank_max)
@@ -62,7 +76,7 @@ if (rank_max > 1) {
 - Sets global variable so user code can call `faasr_rank()` to know which rank it is
 - Displays rank in console output (e.g., "Running funcA (my_func) - Rank 2/3")
 
-### Step 4: Isolated execution environment
+### Step 4: Isolated Execution Environment
 ```r
 run_dir <- file.path(temp_dir, name)
 if (!dir.exists(run_dir)) dir.create(run_dir, recursive = TRUE)
@@ -78,7 +92,7 @@ setwd(run_dir)
 - `FAASR_DATA_ROOT` tells APIs where to find shared files
 - Isolation prevents functions from interfering with each other's temp files
 
-### Step 5: Execute and capture result
+### Step 5: Execute and Capture Result
 ```r
 f <- get(func_name, envir = .GlobalEnv)
 res <- try(do.call(f, args), silent = TRUE)
@@ -94,7 +108,7 @@ if (inherits(res, "try-error")) {
 - `try(..., silent=TRUE)` catches errors without stopping the script
 - `res` contains the return value (needed for conditional branching)
 
-### Step 6: Mark completion
+### Step 6: Mark Completion
 ```r
 if (rank_current == rank_max) {
   utils::write.table("TRUE", file = file.path(state_dir, paste0(name, ".done")), ...)
@@ -107,7 +121,7 @@ visited <- c(visited, visited_key)
 - Only write `.done` after the **final rank** completes (not after each rank)
 - Add to `visited` to prevent re-execution of this specific rank
 
-### Step 7: Enqueue successors (conditional branching)
+### Step 7: Enqueue Successors (Conditional Branching)
 ```r
 if (rank_current == rank_max) {
   nexts <- node$InvokeNext %||% list()
@@ -151,7 +165,7 @@ if (rank_current == rank_max) {
 
 The parser extracts function name and rank from strings like `"FuncName"` or `"FuncName(3)"`.
 
-### Step 1: Trim and validate format
+### Step 1: Trim and Validate Format
 ```r
 s <- trimws(invoke_string)
 
@@ -166,7 +180,7 @@ if (grepl("\\[|\\]", s)) {
 - Rejects old formats like `"FuncName[TRUE]"` or `"FuncName[FALSE]"`
 - **Why reject brackets?** Conditional branching is now handled via `{True: [...], False: [...]}` objects, not inline notation
 
-### Step 2: Parse with regex
+### Step 2: Parse with Regex
 ```r
 m <- regexec("^(.*?)(?:\\((\\d+)\\))?$", s)
 mm_all <- regmatches(s, m)
@@ -198,7 +212,7 @@ mm <- mm_all[[1]]
 - `"myFunc(5)"` → `mm = c("myFunc(5)", "myFunc", "5")`
 - `"myFunc()"` → Error (no digits between parentheses)
 
-### Step 3: Extract function name
+### Step 3: Extract Function Name
 ```r
 func_name <- trimws(mm[2])
 if (!nzchar(func_name)) {
@@ -211,7 +225,7 @@ if (!nzchar(func_name)) {
 - `nzchar()` checks if string has non-zero length
 - Catches edge cases like `""` or `"   "` (whitespace only)
 
-### Step 4: Extract rank (default to 1)
+### Step 4: Extract Rank (Default to 1)
 ```r
 rank <- 1
 if (nzchar(mm[3])) {
@@ -224,7 +238,7 @@ if (nzchar(mm[3])) {
 - If `mm[3]` has digits (e.g., "5") → convert to integer
 - `as.integer("5")` returns `5L` (integer type in R)
 
-### Step 5: Return parsed result
+### Step 5: Return Parsed Result
 ```r
 list(func_name = func_name, condition = NULL, rank = rank)
 ```
@@ -244,6 +258,8 @@ Predecessor gating ensures functions with multiple parents wait for all uncondit
 ### The Problem
 
 Consider this workflow:
+
+```
 ```
 funcA --True--> funcB
   |
@@ -257,12 +273,14 @@ funcB ---------> funcC
 - `funcC` has TWO predecessors: `funcA` (conditional) and `funcB` (unconditional)
 
 **If `funcA` returns FALSE:**
+
 - Only `funcC` should run (via False branch)
 - `funcB` never runs
 - But naive gating would wait for BOTH `funcA.done` AND `funcB.done`
 - **Deadlock!** `funcC` waits forever for `funcB` which will never execute
 
 **Solution: Only gate on unconditional predecessors**
+{: .notice--success}
 
 ### `.faasr_find_predecessors()` — The Discovery Phase
 
@@ -276,7 +294,7 @@ funcB ---------> funcC
 
 The function loops through every action in the workflow and checks if it invokes `target_func`.
 
-#### Case 1: String InvokeNext (always unconditional)
+#### Case 1: String InvokeNext (Always Unconditional)
 ```r
 if (is.character(nx)) {
   next_names <- sub("\\(.*$", "", nx)
@@ -288,7 +306,7 @@ if (is.character(nx)) {
 - Result: `next_names = c("funcB", "funcC")`
 - These are **unconditional** successors
 
-#### Case 2: List InvokeNext (may contain conditionals)
+#### Case 2: List InvokeNext (May Contain Conditionals)
 ```r
 } else if (is.list(nx)) {
   for (item in nx) {
@@ -312,7 +330,7 @@ if (is.character(nx)) {
 - **If `unconditional_only = TRUE`**: Skip conditional branches entirely
 - **If `unconditional_only = FALSE`**: Include both True and False targets
 
-#### Checking if this node is a predecessor
+#### Checking if This Node is a Predecessor
 ```r
 if (length(next_names) && any(next_names == target_func)) {
   preds <- c(preds, nm)
@@ -321,7 +339,7 @@ if (length(next_names) && any(next_names == target_func)) {
 
 If any of the successors match `target_func`, add this node `nm` to predecessors list.
 
-#### Example walkthrough:
+#### Example Walkthrough:
 ```r
 # Workflow:
 ActionList = {
@@ -357,29 +375,29 @@ faasr_predecessor_gate <- function(action_list, current_func, state_dir) {
 }
 ```
 
-#### Step-by-step logic:
+#### Step-by-step Logic:
 
-**1. Find unconditional predecessors only**
+**1. Find Unconditional Predecessors Only**
 ```r
 predecessors <- .faasr_find_predecessors(action_list, current_func, unconditional_only = TRUE)
 ```
 - Ignores conditional branches to avoid the deadlock scenario
 
-**2. Check if multiple predecessors exist**
+**2. Check if Multiple Predecessors Exist**
 ```r
 if (length(predecessors) > 1) {
 ```
 - If 0 or 1 predecessor → no gating needed (single parent or entry point)
 - If 2+ predecessors → need to wait for all to complete
 
-**3. Read .done files from state directory**
+**3. Read .done Files from State Directory**
 ```r
 done_list <- try(list.files(state_dir), silent = TRUE)
 ```
 - Example: `c("funcA.done", "funcB.done")`
 - These marker files indicate completed functions
 
-**4. Check each predecessor**
+**4. Check Each Predecessor**
 ```r
 for (p in predecessors) {
   if (!(paste0(p, ".done") %in% done_list)) {
@@ -391,14 +409,14 @@ for (p in predecessors) {
 - If any `.done` file is missing → return `"next"` (skip execution, keep in queue)
 - If all `.done` files exist → fall through to `TRUE`
 
-**5. Return TRUE (ready to execute)**
+**5. Return TRUE (Ready to Execute)**
 ```r
 TRUE
 ```
 - All unconditional predecessors have completed
 - Safe to proceed with execution
 
-### Why this works:
+### Why This Works:
 - Functions in conditional branches aren't required for gating
 - Only "guaranteed" predecessors block execution
 - Conditional logic handles branch selection separately
@@ -410,19 +428,22 @@ TRUE
 
 Cycle detection uses **Depth-First Search (DFS)** to detect cycles in the workflow graph.
 
-### What is a cycle?
+### What is a Cycle?
 
 A cycle occurs when you can follow `InvokeNext` links and return to a node you've already visited:
+
+```
 ```
 funcA → funcB → funcC → funcB  (CYCLE! funcB appears twice)
 ```
 
 **Why detect cycles?**
+
 - Cyclic workflows would loop forever
 - Must validate before execution starts
 - Better to fail fast with clear error than hang indefinitely
 
-### `.faasr_build_adjacency()` — Convert workflow to graph
+### `.faasr_build_adjacency()` — Convert Workflow to Graph
 
 ```r
 .faasr_build_adjacency <- function(action_list) {
@@ -485,6 +506,7 @@ This creates a simple graph: `adj["funcA"]` tells you which functions `funcA` ca
 - `stack`: Tracks current recursion path (nodes currently being explored)
 
 **Why two tracking structures?**
+
 - `visited`: "Have we checked this node at all?" (global memory)
 - `stack`: "Are we currently inside this node's subtree?" (recursion depth)
 
@@ -499,7 +521,7 @@ is_cyclic <- function(node) {
 
 Validates the node exists in the workflow. Catches typos in `InvokeNext` (e.g., calling non-existent `"funcZ"`).
 
-#### Step 1: Detect back edge (cycle)
+#### Step 1: Detect Back Edge (Cycle)
 ```r
   if (isTRUE(get0(node, envir = stack, inherits = FALSE, ifnotfound = FALSE))) {
     return(TRUE)
@@ -510,7 +532,7 @@ Validates the node exists in the workflow. Catches typos in `InvokeNext` (e.g., 
 - If yes → **CYCLE DETECTED!** We've returned to a node we're currently exploring
 - Think of it as: "If I'm already inside funcA's exploration, and funcA appears again, that's a loop"
 
-#### Step 2: Mark node as being explored
+#### Step 2: Mark Node as Being Explored
 ```r
   assign(node, TRUE, envir = stack)
   assign(node, TRUE, envir = visited)
@@ -519,7 +541,7 @@ Validates the node exists in the workflow. Catches typos in `InvokeNext` (e.g., 
 - Add to `stack`: "We're now exploring this node's children"
 - Add to `visited`: "We've seen this node (don't need to check it again later)"
 
-#### Step 3: Recursively check all children
+#### Step 3: Recursively Check All Children
 ```r
   nbrs <- adj[[node]]
   if (!is.null(nbrs) && length(nbrs)) {
@@ -535,7 +557,7 @@ Validates the node exists in the workflow. Catches typos in `InvokeNext` (e.g., 
 
 This is the heart of DFS! For each neighbor:
 
-**Case A: Never visited before**
+**Case A: Never Visited Before**
 ```r
 if (!isTRUE(get0(nbr, envir = visited, ...))) {
   if (is_cyclic(nbr)) return(TRUE)
@@ -545,7 +567,7 @@ if (!isTRUE(get0(nbr, envir = visited, ...))) {
 - **Recursively check it** (go deeper into the tree)
 - If the recursive call finds a cycle, bubble it up
 
-**Case B: Visited but in current path**
+**Case B: Visited but in Current Path**
 ```r
 else if (isTRUE(get0(nbr, envir = stack, ...))) {
   return(TRUE)
@@ -555,12 +577,12 @@ else if (isTRUE(get0(nbr, envir = stack, ...))) {
 - **Back edge detected!** This is a cycle
 - Example: `funcA → funcB → funcC → funcA` (funcA is visited AND in stack)
 
-**Case C: Visited but NOT in current path**
+**Case C: Visited but NOT in Current Path**
 - If neighbor is in `visited` but NOT in `stack`
 - This is a **cross edge** or **forward edge** (already fully explored, no cycle)
 - Do nothing (safe to skip)
 
-#### Step 4: Remove from stack (backtrack)
+#### Step 4: Remove from Stack (Backtrack)
 ```r
   assign(node, FALSE, envir = stack)
   FALSE
@@ -626,10 +648,11 @@ TRUE
 ## Summary
 
 These algorithms work together to provide:
+
 - **Safe execution**: Cycle detection prevents infinite loops
 - **Correct synchronization**: Predecessor gating ensures proper execution order
 - **Flexible branching**: Conditional logic supports dynamic workflows
 - **Parallel execution**: Rank support enables scalable workflows
 
-For the complete code walkthrough, see [code_walkthrough.md](code_walkthrough.md).
+For the complete code walkthrough, see [overview.md](overview.md).
 

@@ -1,14 +1,21 @@
-#' faasr_test: Run an R workflow locally 
-#'
+globalVariables(c("FAASR_CURRENT_RANK_INFO", "FAASR_INVOCATION_ID"))
+
+#' @name faasr_test
+#' @title faasr_test
+#' @description
 #' This function loads a FaaSr workflow JSON and executes functions sequentially
-#' in InvokeNext order
-#'
+#' in InvokeNext order. It provides a local testing environment for FaaSr workflows
+#' without requiring cloud infrastructure.
 #' @param json_path path to workflow JSON
 #' @return TRUE if all functions run successfully; stops on error
 #' @import jsonlite
 #' @import cli
+#' @importFrom utils download.file write.table
 #' @export
-
+#' @examples
+#' \dontrun{
+#' faasr_test("workflow.json")
+#' }
 faasr_test <- function(json_path) {
   if (!file.exists(json_path)) stop(sprintf("Workflow JSON not found: %s", json_path))
   wf <- jsonlite::fromJSON(json_path, simplifyVector = FALSE)
@@ -180,9 +187,25 @@ faasr_test <- function(json_path) {
   TRUE
 }
 
+#' @name %||%
+#' @title Default value operator
+#' @description
+#' Internal operator that returns the second argument if the first is NULL.
+#' @param x First argument to check
+#' @param y Default value to return if x is NULL
+#' @return x if not NULL, otherwise y
+#' @keywords internal
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
-# Simple configuration check mirroring the package's behavior
+#' @name faasr_configuration_check
+#' @title Check FaaSr workflow configuration
+#' @description
+#' Validates a FaaSr workflow configuration for basic sanity, JSON schema compliance,
+#' and cycle detection. This function mirrors the behavior of the production FaaSr package.
+#' @param faasr List containing the parsed workflow configuration
+#' @param state_dir Character string path to the state directory
+#' @return TRUE if configuration is valid, error message string otherwise
+#' @keywords internal
 faasr_configuration_check <- function(faasr, state_dir) {
   # Basic JSON sanity
   if (is.null(faasr$ActionList) || is.null(faasr$FunctionInvoke)) {
@@ -215,7 +238,7 @@ faasr_configuration_check <- function(faasr, state_dir) {
   TRUE
 }
 
-# IMPROVED VERSION (commented out - avoids conditional branch deadlocks)
+# IMPROVED VERSION 
 # This version only gates on unconditional predecessors to prevent deadlocks
 # when a function appears in both conditional and unconditional paths.
 # Example deadlock scenario:
@@ -267,8 +290,16 @@ faasr_configuration_check <- function(faasr, state_dir) {
 #   TRUE
 # }
 
-# CURRENT VERSION: Matches FaaSr-package behavior (gates on ALL predecessors)
-# This matches the original package but may deadlock with conditional branches
+#' @name .faasr_find_predecessors
+#' @title Find predecessor functions in workflow
+#' @description
+#' Internal function to find all predecessor functions for a given target function
+#' in the workflow action list. This matches the original package behavior but may
+#' deadlock with conditional branches.
+#' @param action_list List containing the workflow action definitions
+#' @param target_func Character string name of the target function
+#' @return Character vector of predecessor function names
+#' @keywords internal
 .faasr_find_predecessors <- function(action_list, target_func) {
   preds <- character()
   for (nm in names(action_list)) {
@@ -294,6 +325,16 @@ faasr_configuration_check <- function(faasr, state_dir) {
   unique(preds)
 }
 
+#' @name faasr_predecessor_gate
+#' @title Gate function execution based on predecessors
+#' @description
+#' Internal function to check if all predecessor functions have completed before
+#' allowing the current function to execute. Uses .done files to track completion.
+#' @param action_list List containing the workflow action definitions
+#' @param current_func Character string name of the current function
+#' @param state_dir Character string path to the state directory
+#' @return "next" if predecessors not ready, TRUE if ready to execute
+#' @keywords internal
 faasr_predecessor_gate <- function(action_list, current_func, state_dir) {
   predecessors <- .faasr_find_predecessors(action_list, current_func)
   if (length(predecessors) > 1) {
@@ -308,7 +349,14 @@ faasr_predecessor_gate <- function(action_list, current_func, state_dir) {
   TRUE
 }
 
-# Build adjacency list from ActionList using InvokeNext references
+#' @name .faasr_build_adjacency
+#' @title Build adjacency list from ActionList
+#' @description
+#' Internal function to build an adjacency list representation of the workflow
+#' graph from the ActionList using InvokeNext references.
+#' @param action_list List containing the workflow action definitions
+#' @return List where each element contains the names of functions that can be invoked next
+#' @keywords internal
 .faasr_build_adjacency <- function(action_list) {
   adj <- list()
   for (nm in names(action_list)) {
@@ -331,7 +379,15 @@ faasr_predecessor_gate <- function(action_list, current_func, state_dir) {
   adj
 }
 
-# Detect cycles starting from FunctionInvoke
+#' @name .faasr_check_workflow_cycle_local
+#' @title Detect cycles in workflow graph
+#' @description
+#' Internal function to detect cycles in the workflow graph using depth-first search.
+#' Workflows must be acyclic (DAG) to be valid.
+#' @param faasr List containing the parsed workflow configuration
+#' @param start_node Character string name of the starting function
+#' @return TRUE if no cycles detected, stops with error if cycle found
+#' @keywords internal
 .faasr_check_workflow_cycle_local <- function(faasr, start_node) {
   action_list <- faasr$ActionList
   if (is.null(action_list) || !length(action_list)) {
@@ -376,7 +432,14 @@ faasr_predecessor_gate <- function(action_list, current_func, state_dir) {
   TRUE
 }
 
-# Parse InvokeNext string to extract function name and rank
+#' @name .faasr_parse_invoke_next_string
+#' @title Parse InvokeNext string to extract function name and rank
+#' @description
+#' Internal function to parse InvokeNext strings that may contain rank notation.
+#' Supports formats like "FunctionName" and "FunctionName(3)" for parallel execution.
+#' @param invoke_string Character string to parse
+#' @return List containing func_name, condition, and rank
+#' @keywords internal
 .faasr_parse_invoke_next_string <- function(invoke_string) {
   s <- trimws(invoke_string)
 
@@ -406,7 +469,15 @@ faasr_predecessor_gate <- function(action_list, current_func, state_dir) {
   list(func_name = func_name, condition = NULL, rank = rank)
 }
 
-# Generate invocation ID based on workflow configuration
+#' @name .faasr_generate_invocation_id
+#' @title Generate invocation ID based on workflow configuration
+#' @description
+#' Internal function to generate a unique invocation ID for the workflow execution.
+#' Uses InvocationID from workflow if specified, otherwise generates based on
+#' InvocationIDFromDate format or creates a UUID-like identifier.
+#' @param wf List containing the parsed workflow configuration
+#' @return Character string invocation ID
+#' @keywords internal
 .faasr_generate_invocation_id <- function(wf) {
   # Check if InvocationID is already set in the workflow
   if (!is.null(wf$InvocationID) && nzchar(wf$InvocationID)) {

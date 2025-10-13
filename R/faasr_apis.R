@@ -1,9 +1,10 @@
-#' Local filesystem implementations of faasr_* APIs
-#' These mirror the signatures but operate on a local workspace folder.
-#' The workspace root is 'faasr_data'; files live under 'faasr_data/files'.
-#' Logs live under 'faasr_data/logs'.
-
-
+#' @name .fa_local_root
+#' @title Get local FaaSr data root directory
+#' @description
+#' Internal function to get the root directory for local FaaSr data storage.
+#' Uses the FAASR_DATA_ROOT environment variable if set, otherwise defaults to 'faasr_data' in the current working directory.
+#' @return Character string path to the root directory
+#' @keywords internal
 .fa_local_root <- function() {
   env_root <- Sys.getenv("FAASR_DATA_ROOT", unset = "")
   if (nzchar(env_root)) {
@@ -15,19 +16,53 @@
   root
 }
 
+#' @name .fa_files_root
+#' @title Get local FaaSr files directory
+#' @description
+#' Internal function to get the files directory for local FaaSr data storage.
+#' Creates the directory if it doesn't exist.
+#' @return Character string path to the files directory
+#' @keywords internal
 .fa_files_root <- function() {
   files <- file.path(.fa_local_root(), "files")
   if (!dir.exists(files)) dir.create(files, recursive = TRUE)
   files
 }
 
+#' @name .fa_logs_root
+#' @title Get local FaaSr logs directory
+#' @description
+#' Internal function to get the logs directory for local FaaSr data storage.
+#' Creates the directory if it doesn't exist.
+#' @return Character string path to the logs directory
+#' @keywords internal
 .fa_logs_root <- function() {
   logs <- file.path(.fa_local_root(), "logs")
   if (!dir.exists(logs)) dir.create(logs, recursive = TRUE)
   logs
 }
 
-#' Put (upload) a file to local storage
+#' @name faasr_put_file
+#' @title Put (upload) a file to local storage
+#' @description
+#' Uploads a file from the local filesystem to the local FaaSr storage.
+#' This function mirrors the signature of the production FaaSr API but operates on local filesystem.
+#' @param server_name Character string specifying the server name (ignored in local implementation)
+#' @param local_folder Character string path to the local folder containing the file to upload
+#' @param local_file Character string name of the local file to upload
+#' @param remote_folder Character string path to the remote folder where the file will be stored
+#' @param remote_file Character string name for the file in remote storage
+#' @return Invisibly returns TRUE on success
+#' @export
+#' @examples
+#' \dontrun{
+#' # Upload a local file to remote storage
+#' faasr_put_file(local_file = "data.csv", remote_file = "input/data.csv")
+#' 
+#' # Upload from a specific local folder
+#' faasr_put_file(local_folder = "input", local_file = "data.csv", 
+#'                remote_folder = "processed", remote_file = "data.csv")
+#' }
 faasr_put_file <- function(server_name = NULL, local_folder = ".", local_file,
                            remote_folder = "", remote_file) {
   # Clean inputs
@@ -45,7 +80,27 @@ faasr_put_file <- function(server_name = NULL, local_folder = ".", local_file,
   invisible(TRUE)
 }
 
-#' Get (download) a file from local storage
+#' @name faasr_get_file
+#' @title Get (download) a file from local storage
+#' @description
+#' Downloads a file from the local FaaSr storage to the local filesystem.
+#' This function mirrors the signature of the production FaaSr API but operates on local filesystem.
+#' @param server_name Character string specifying the server name (ignored in local implementation)
+#' @param remote_folder Character string path to the remote folder containing the file to download
+#' @param remote_file Character string name of the remote file to download
+#' @param local_folder Character string path to the local folder where the file will be saved
+#' @param local_file Character string name for the file in local storage
+#' @return Invisibly returns TRUE on success
+#' @export
+#' @examples
+#' \dontrun{
+#' # Download a file from remote storage
+#' faasr_get_file(remote_file = "data.csv", local_file = "downloaded_data.csv")
+#' 
+#' # Download to a specific local folder
+#' faasr_get_file(remote_folder = "processed", remote_file = "data.csv",
+#'                local_folder = "output", local_file = "data.csv")
+#' }
 faasr_get_file <- function(server_name = NULL, remote_folder = "", remote_file,
                            local_folder = ".", local_file) {
   remote_folder <- sub("^/+", "", sub("/+$", "", remote_folder))
@@ -62,7 +117,24 @@ faasr_get_file <- function(server_name = NULL, remote_folder = "", remote_file,
   invisible(TRUE)
 }
 
-#' Delete a file from local storage
+#' @name faasr_delete_file
+#' @title Delete a file from local storage
+#' @description
+#' Deletes a file from the local FaaSr storage.
+#' This function mirrors the signature of the production FaaSr API but operates on local filesystem.
+#' @param server_name Character string specifying the server name (ignored in local implementation)
+#' @param remote_folder Character string path to the remote folder containing the file to delete
+#' @param remote_file Character string name of the remote file to delete
+#' @return Invisibly returns TRUE on success
+#' @export
+#' @examples
+#' \dontrun{
+#' # Delete a file from remote storage
+#' faasr_delete_file(remote_file = "temp_data.csv")
+#' 
+#' # Delete a file from a specific remote folder
+#' faasr_delete_file(remote_folder = "temp", remote_file = "data.csv")
+#' }
 faasr_delete_file <- function(server_name = NULL, remote_folder = "", remote_file) {
   remote_folder <- sub("^/+", "", sub("/+$", "", remote_folder))
   src_dir <- if (nzchar(remote_folder)) file.path(.fa_files_root(), remote_folder) else .fa_files_root()
@@ -71,7 +143,23 @@ faasr_delete_file <- function(server_name = NULL, remote_folder = "", remote_fil
   invisible(TRUE)
 }
 
-#' List files in local storage with optional prefix
+#' @name faasr_get_folder_list
+#' @title List files in local storage with optional prefix
+#' @description
+#' Lists all files in the local FaaSr storage, optionally filtered by a prefix.
+#' This function mirrors the signature of the production FaaSr API but operates on local filesystem.
+#' @param server_name Character string specifying the server name (ignored in local implementation)
+#' @param faasr_prefix Character string prefix to filter file names (optional)
+#' @return Character vector of file names matching the criteria
+#' @export
+#' @examples
+#' \dontrun{
+#' # List all files in storage
+#' files <- faasr_get_folder_list()
+#' 
+#' # List files with a specific prefix
+#' csv_files <- faasr_get_folder_list(faasr_prefix = "data_")
+#' }
 faasr_get_folder_list <- function(server_name = NULL, faasr_prefix = "") {
   files <- list.files(.fa_files_root(), recursive = TRUE, all.files = FALSE)
   files <- files[!dir.exists(file.path(.fa_files_root(), files))]
@@ -79,7 +167,22 @@ faasr_get_folder_list <- function(server_name = NULL, faasr_prefix = "") {
   files
 }
 
-#' Append a log message to local logs
+#' @name faasr_log
+#' @title Append a log message to local logs
+#' @description
+#' Appends a log message with timestamp to the local FaaSr log file.
+#' This function mirrors the signature of the production FaaSr API but operates on local filesystem.
+#' @param log_message Character string message to log
+#' @return Invisibly returns TRUE on success
+#' @export
+#' @examples
+#' \dontrun{
+#' # Log a simple message
+#' faasr_log("Starting data processing")
+#' 
+#' # Log with more detail
+#' faasr_log(paste("Processing", nrow(data), "rows of data"))
+#' }
 faasr_log <- function(log_message) {
   ts <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
   logfile <- file.path(.fa_logs_root(), paste0("faasr_", format(Sys.time(), "%Y%m%d"), ".log"))
@@ -87,8 +190,21 @@ faasr_log <- function(log_message) {
   invisible(TRUE)
 }
 
-#' Get current rank information for the executing function
-
+#' @name faasr_rank
+#' @title Get current rank information for the executing function
+#' @description
+#' Returns the current rank information for the executing function in a parallel workflow.
+#' This function mirrors the signature of the production FaaSr API but operates on local filesystem.
+#' @return List containing Rank and MaxRank, or empty list if no rank information is available
+#' @export
+#' @examples
+#' \dontrun{
+#' # Get current rank information
+#' rank_info <- faasr_rank()
+#' if (length(rank_info) > 0) {
+#'   cat("Current rank:", rank_info$Rank, "of", rank_info$MaxRank, "\n")
+#' }
+#' }
 faasr_rank <- function() {
   rank_info <- get0("FAASR_CURRENT_RANK_INFO", envir = .GlobalEnv, inherits = FALSE, ifnotfound = NULL)
   
@@ -105,7 +221,21 @@ faasr_rank <- function() {
   return(list())
 }
 
-#' Get the invocation ID for the current workflow
+#' @name faasr_invocation_id
+#' @title Get the invocation ID for the current workflow
+#' @description
+#' Returns the invocation ID for the current workflow execution.
+#' This function mirrors the signature of the production FaaSr API but operates on local filesystem.
+#' @return Character string invocation ID, or NULL if not available
+#' @export
+#' @examples
+#' \dontrun{
+#' # Get current invocation ID
+#' inv_id <- faasr_invocation_id()
+#' if (!is.null(inv_id)) {
+#'   cat("Invocation ID:", inv_id, "\n")
+#' }
+#' }
 faasr_invocation_id <- function() {
   invocation_id <- get0("FAASR_INVOCATION_ID", envir = .GlobalEnv, inherits = FALSE, ifnotfound = NULL)
   if (is.null(invocation_id)) {
