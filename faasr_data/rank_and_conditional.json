@@ -25,7 +25,7 @@
         "FaaSServer": "My_GitHub_Account",
         "Type": "R",
         "Arguments": {
-          "condition": true
+          "condition": false
         },
         "InvokeNext": [
           {"True": ["ranked_function(3)"], "False": ["final_function"]}

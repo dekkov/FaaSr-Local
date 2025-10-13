@@ -215,13 +215,65 @@ faasr_configuration_check <- function(faasr, state_dir) {
   TRUE
 }
 
-.faasr_find_predecessors <- function(action_list, target_func, unconditional_only = FALSE) {
+# IMPROVED VERSION (commented out - avoids conditional branch deadlocks)
+# This version only gates on unconditional predecessors to prevent deadlocks
+# when a function appears in both conditional and unconditional paths.
+# Example deadlock scenario:
+#   funcA --True--> funcB
+#     |
+#     +----False--> funcC
+#   funcB ---------> funcC
+# If funcA returns FALSE, funcC should run but would deadlock waiting for funcB.done
+#
+# .faasr_find_predecessors <- function(action_list, target_func, unconditional_only = FALSE) {
+#   preds <- character()
+#   for (nm in names(action_list)) {
+#     nx <- action_list[[nm]]$InvokeNext %||% list()
+#     next_names <- character()
+#     is_conditional <- FALSE
+#     if (is.character(nx)) {
+#       next_names <- sub("\\(.*$", "", nx)
+#     } else if (is.list(nx)) {
+#       for (item in nx) {
+#         if (is.character(item)) {
+#           next_names <- c(next_names, sub("\\(.*$", "", item))
+#         } else if (is.list(item)) {
+#           is_conditional <- TRUE
+#           if (!unconditional_only) {
+#             if (!is.null(item$True)) next_names <- c(next_names, sub("\\(.*$", "", unlist(item$True)))
+#             if (!is.null(item$False)) next_names <- c(next_names, sub("\\(.*$", "", unlist(item$False)))
+#           }
+#         }
+#       }
+#     }
+#     if (length(next_names) && any(next_names == target_func)) {
+#       preds <- c(preds, nm)
+#     }
+#   }
+#   unique(preds)
+# }
+#
+# faasr_predecessor_gate <- function(action_list, current_func, state_dir) {
+#   predecessors <- .faasr_find_predecessors(action_list, current_func, unconditional_only = TRUE)
+#   if (length(predecessors) > 1) {
+#     done_list <- try(list.files(state_dir), silent = TRUE)
+#     if (inherits(done_list, "try-error")) done_list <- character()
+#     for (p in predecessors) {
+#       if (!(paste0(p, ".done") %in% done_list)) {
+#         return("next")
+#       }
+#     }
+#   }
+#   TRUE
+# }
+
+# CURRENT VERSION: Matches FaaSr-package behavior (gates on ALL predecessors)
+# This matches the original package but may deadlock with conditional branches
+.faasr_find_predecessors <- function(action_list, target_func) {
   preds <- character()
   for (nm in names(action_list)) {
     nx <- action_list[[nm]]$InvokeNext %||% list()
-    # normalize to character vector of names
     next_names <- character()
-    is_conditional <- FALSE
     if (is.character(nx)) {
       next_names <- sub("\\(.*$", "", nx)
     } else if (is.list(nx)) {
@@ -229,12 +281,9 @@ faasr_configuration_check <- function(faasr, state_dir) {
         if (is.character(item)) {
           next_names <- c(next_names, sub("\\(.*$", "", item))
         } else if (is.list(item)) {
-          # This is a conditional branch
-          is_conditional <- TRUE
-          if (!unconditional_only) {
-            if (!is.null(item$True)) next_names <- c(next_names, sub("\\(.*$", "", unlist(item$True)))
-            if (!is.null(item$False)) next_names <- c(next_names, sub("\\(.*$", "", unlist(item$False)))
-          }
+          # Include ALL branches (both True and False)
+          if (!is.null(item$True)) next_names <- c(next_names, sub("\\(.*$", "", unlist(item$True)))
+          if (!is.null(item$False)) next_names <- c(next_names, sub("\\(.*$", "", unlist(item$False)))
         }
       }
     }
@@ -245,11 +294,8 @@ faasr_configuration_check <- function(faasr, state_dir) {
   unique(preds)
 }
 
-# Predecessor gating: if multiple UNCONDITIONAL predecessors, require all .done present
-# Conditional branches are handled by the branching logic itself, not gating
 faasr_predecessor_gate <- function(action_list, current_func, state_dir) {
-  # Only gate on unconditional predecessors to avoid blocking on unexecuted conditional branches
-  predecessors <- .faasr_find_predecessors(action_list, current_func, unconditional_only = TRUE)
+  predecessors <- .faasr_find_predecessors(action_list, current_func)
   if (length(predecessors) > 1) {
     done_list <- try(list.files(state_dir), silent = TRUE)
     if (inherits(done_list, "try-error")) done_list <- character()
