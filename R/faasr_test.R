@@ -1,4 +1,34 @@
-globalVariables(c("FAASR_CURRENT_RANK_INFO", "FAASR_INVOCATION_ID"))
+#' @name .faasr_write_rank_info
+#' @title Write rank information to temporary file
+#' @description
+#' Internal function to write rank information to a temporary file for the current execution context.
+#' @param rank_info Character string rank information in format "current/max" or NULL
+#' @param state_dir Character string path to the state directory
+#' @return Invisibly returns TRUE on success
+#' @keywords internal
+.faasr_write_rank_info <- function(rank_info, state_dir) {
+  rank_file <- file.path(state_dir, "current_rank_info.txt")
+  if (is.null(rank_info)) {
+    if (file.exists(rank_file)) unlink(rank_file)
+  } else {
+    writeLines(rank_info, rank_file)
+  }
+  invisible(TRUE)
+}
+
+#' @name .faasr_write_invocation_id
+#' @title Write invocation ID to temporary file
+#' @description
+#' Internal function to write invocation ID to a temporary file for the current execution context.
+#' @param invocation_id Character string invocation ID
+#' @param state_dir Character string path to the state directory
+#' @return Invisibly returns TRUE on success
+#' @keywords internal
+.faasr_write_invocation_id <- function(invocation_id, state_dir) {
+  inv_file <- file.path(state_dir, "current_invocation_id.txt")
+  writeLines(invocation_id, inv_file)
+  invisible(TRUE)
+}
 
 #' @name faasr_test
 #' @title faasr_test
@@ -11,6 +41,7 @@ globalVariables(c("FAASR_CURRENT_RANK_INFO", "FAASR_INVOCATION_ID"))
 #' @import jsonlite
 #' @import cli
 #' @importFrom utils download.file write.table
+#' @importFrom uuid UUIDgenerate
 #' @export
 #' @examples
 #' \dontrun{
@@ -18,9 +49,37 @@ globalVariables(c("FAASR_CURRENT_RANK_INFO", "FAASR_INVOCATION_ID"))
 #' }
 faasr_test <- function(json_path) {
   if (!file.exists(json_path)) stop(sprintf("Workflow JSON not found: %s", json_path))
-  wf <- jsonlite::fromJSON(json_path, simplifyVector = FALSE)
-  if (is.null(wf$ActionList)) stop("Invalid workflow JSON: missing ActionList")
-  if (is.null(wf$FunctionInvoke)) stop("Invalid workflow JSON: missing FunctionInvoke")
+  
+  # Parse JSON with better error handling
+  wf <- try(jsonlite::fromJSON(json_path, simplifyVector = FALSE), silent = TRUE)
+  if (inherits(wf, "try-error")) {
+    stop(sprintf("JSON parsing error in %s: %s", json_path, as.character(wf)))
+  }
+  
+  # Validate required fields with specific error messages
+  if (is.null(wf$ActionList)) stop("Invalid workflow JSON: missing required field 'ActionList'")
+  if (is.null(wf$FunctionInvoke)) stop("Invalid workflow JSON: missing required field 'FunctionInvoke'")
+  
+  # Validate ActionList structure
+  if (!is.list(wf$ActionList)) stop("Invalid workflow JSON: 'ActionList' must be an object")
+  if (length(wf$ActionList) == 0) stop("Invalid workflow JSON: 'ActionList' cannot be empty")
+  
+  # Validate each action in ActionList
+  for (action_name in names(wf$ActionList)) {
+    action <- wf$ActionList[[action_name]]
+    if (!is.list(action)) {
+      stop(sprintf("Invalid workflow JSON: action '%s' must be an object", action_name))
+    }
+    if (is.null(action$FunctionName) || !is.character(action$FunctionName) || nchar(action$FunctionName) == 0) {
+      stop(sprintf("Invalid workflow JSON: action '%s' is missing required field 'FunctionName'", action_name))
+    }
+    if (is.null(action$FaaSServer) || !is.character(action$FaaSServer) || nchar(action$FaaSServer) == 0) {
+      stop(sprintf("Invalid workflow JSON: action '%s' is missing required field 'FaaSServer'", action_name))
+    }
+    if (is.null(action$Type) || !is.character(action$Type) || nchar(action$Type) == 0) {
+      stop(sprintf("Invalid workflow JSON: action '%s' is missing required field 'Type'", action_name))
+    }
+  }
   
 
   # Source user and local API R files
@@ -33,13 +92,6 @@ faasr_test <- function(json_path) {
       }
     }
   }
-
-  # Initialize global environment for rank info
-  assign("FAASR_CURRENT_RANK_INFO", NULL, envir = .GlobalEnv)
-  
-  # Generate and set invocation ID
-  invocation_id <- .faasr_generate_invocation_id(wf)
-  assign("FAASR_INVOCATION_ID", invocation_id, envir = .GlobalEnv)
 
   # Build a simple queue for the functions in the workflow
   # Each item is a list with: name, rank_current, rank_max
@@ -57,6 +109,10 @@ faasr_test <- function(json_path) {
   if (!dir.exists(temp_dir)) dir.create(temp_dir, recursive = TRUE)
   if (!dir.exists(state_dir)) dir.create(state_dir, recursive = TRUE)
   if (!dir.exists(files_dir)) dir.create(files_dir, recursive = TRUE)
+  
+  # Generate and write invocation ID to temporary file
+  invocation_id <- .faasr_generate_invocation_id(wf)
+  .faasr_write_invocation_id(invocation_id, state_dir)
   
   # Clean files outputs at start to avoid stale artifacts between runs
   files_to_remove <- try(list.files(files_dir,
@@ -115,13 +171,13 @@ faasr_test <- function(json_path) {
       stop(cfg)
     }
 
-    # Set rank info in global environment before execution
+    # Set rank info in temporary file before execution
     if (rank_max > 1) {
       rank_info <- paste0(rank_current, "/", rank_max)
-      assign("FAASR_CURRENT_RANK_INFO", rank_info, envir = .GlobalEnv)
+      .faasr_write_rank_info(rank_info, state_dir)
       cli::cli_h2(sprintf("Running %s (%s) - Rank %s", name, func_name, rank_info))
     } else {
-      assign("FAASR_CURRENT_RANK_INFO", NULL, envir = .GlobalEnv)
+      .faasr_write_rank_info(NULL, state_dir)
       cli::cli_h2(sprintf("Running %s (%s)", name, func_name))
     }
     
@@ -183,6 +239,12 @@ faasr_test <- function(json_path) {
     }
   }
 
+  # Clean up temporary files
+  rank_file <- file.path(state_dir, "current_rank_info.txt")
+  inv_file <- file.path(state_dir, "current_invocation_id.txt")
+  if (file.exists(rank_file)) unlink(rank_file)
+  if (file.exists(inv_file)) unlink(inv_file)
+  
   cli::cli_alert_success("Workflow completed")
   TRUE
 }
@@ -235,7 +297,150 @@ faasr_configuration_check <- function(faasr, state_dir) {
     return("cycle errors")
   }
 
+  # Predecessor type consistency check
+  pred_consistency <- try(.faasr_check_predecessor_consistency(faasr$ActionList), silent = TRUE)
+  if (inherits(pred_consistency, "try-error")) {
+    return(as.character(pred_consistency))
+  }
+
   TRUE
+}
+
+#' @name .faasr_check_predecessor_consistency
+#' @title Check predecessor type consistency in workflow
+#' @description
+#' Internal function to validate that all predecessors of each function are of the same type.
+#' Predecessors must be either all unconditional, all from the same conditional source,
+#' or no predecessors (starting node).
+#' @param action_list List containing the workflow action definitions
+#' @return TRUE if consistent, stops with error if inconsistent
+#' @keywords internal
+.faasr_check_predecessor_consistency <- function(action_list) {
+  for (target_func in names(action_list)) {
+    predecessors <- .faasr_find_predecessors_with_types(action_list, target_func)
+    
+    if (length(predecessors) == 0) {
+      # No predecessors - this is valid (starting node)
+      next
+    }
+    
+    # Check if all predecessors are of the same type
+    pred_types <- sapply(predecessors, function(p) p$type)
+    unique_types <- unique(pred_types)
+    
+    if (length(unique_types) > 1) {
+      # Mixed predecessor types - this is invalid
+      unconditional_preds <- predecessors[pred_types == "unconditional"]
+      conditional_preds <- predecessors[pred_types == "conditional"]
+      
+      error_msg <- sprintf("Function '%s' has mixed predecessor types:\n", target_func)
+      
+      if (length(unconditional_preds) > 0) {
+        unconditional_names <- sapply(unconditional_preds, function(p) p$name)
+        error_msg <- paste0(error_msg, "  - Unconditional: ", paste(unconditional_names, collapse = ", "), "\n")
+      }
+      
+      if (length(conditional_preds) > 0) {
+        conditional_sources <- unique(sapply(conditional_preds, function(p) p$source))
+        for (source in conditional_sources) {
+          source_preds <- conditional_preds[sapply(conditional_preds, function(p) p$source == source)]
+          source_names <- sapply(source_preds, function(p) p$name)
+          source_branches <- unique(sapply(source_preds, function(p) p$branch))
+          error_msg <- paste0(error_msg, "  - Conditional from '", source, "' (", paste(source_branches, collapse = ", "), "): ", paste(source_names, collapse = ", "), "\n")
+        }
+      }
+      
+      error_msg <- paste0(error_msg, "\nAll predecessors must be either:\n")
+      error_msg <- paste0(error_msg, "1. All unconditional edges, OR\n")
+      error_msg <- paste0(error_msg, "2. All from the same conditional source (same action, same or different branches), OR\n")
+      error_msg <- paste0(error_msg, "3. No predecessors (starting node)")
+      
+      stop(error_msg)
+    }
+  }
+  
+  TRUE
+}
+
+#' @name .faasr_find_predecessors_with_types
+#' @title Find predecessor functions with their types in workflow
+#' @description
+#' Internal function to find all predecessor functions for a given target function
+#' and categorize them by type (unconditional vs conditional).
+#' @param action_list List containing the workflow action definitions
+#' @param target_func Character string name of the target function
+#' @return List of predecessor information with name, type, source, and branch
+#' @keywords internal
+.faasr_find_predecessors_with_types <- function(action_list, target_func) {
+  predecessors <- list()
+  
+  for (nm in names(action_list)) {
+    nx <- action_list[[nm]]$InvokeNext %||% list()
+    
+    if (is.character(nx)) {
+      # Unconditional edge
+      next_names <- sub("\\(.*$", "", nx)
+      if (any(next_names == target_func)) {
+        predecessors <- c(predecessors, list(list(
+          name = nm,
+          type = "unconditional",
+          source = nm,
+          branch = NA
+        )))
+      }
+    } else if (is.list(nx)) {
+      for (item in nx) {
+        if (is.character(item)) {
+          # Unconditional edge in list
+          next_names <- sub("\\(.*$", "", item)
+          if (any(next_names == target_func)) {
+            predecessors <- c(predecessors, list(list(
+              name = nm,
+              type = "unconditional",
+              source = nm,
+              branch = NA
+            )))
+          }
+        } else if (is.list(item)) {
+          # Conditional edge
+          if (!is.null(item$True)) {
+            true_names <- sub("\\(.*$", "", unlist(item$True))
+            if (any(true_names == target_func)) {
+              predecessors <- c(predecessors, list(list(
+                name = nm,
+                type = "conditional",
+                source = nm,
+                branch = "True"
+              )))
+            }
+          }
+          if (!is.null(item$False)) {
+            false_names <- sub("\\(.*$", "", unlist(item$False))
+            if (any(false_names == target_func)) {
+              predecessors <- c(predecessors, list(list(
+                name = nm,
+                type = "conditional",
+                source = nm,
+                branch = "False"
+              )))
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  # Remove duplicates based on name
+  unique_predecessors <- list()
+  seen_names <- character()
+  for (pred in predecessors) {
+    if (!(pred$name %in% seen_names)) {
+      unique_predecessors <- c(unique_predecessors, list(pred))
+      seen_names <- c(seen_names, pred$name)
+    }
+  }
+  
+  unique_predecessors
 }
 
 # IMPROVED VERSION 
@@ -473,24 +678,44 @@ faasr_predecessor_gate <- function(action_list, current_func, state_dir) {
 #' @title Generate invocation ID based on workflow configuration
 #' @description
 #' Internal function to generate a unique invocation ID for the workflow execution.
-#' Uses InvocationID from workflow if specified, otherwise generates based on
-#' InvocationIDFromDate format or creates a UUID-like identifier.
+#' Priority: 1) Use InvocationID if provided, 2) Use InvocationIDFromDate if valid, 3) Generate UUID
 #' @param wf List containing the parsed workflow configuration
 #' @return Character string invocation ID
 #' @keywords internal
 .faasr_generate_invocation_id <- function(wf) {
-  # Check if InvocationID is already set in the workflow
-  if (!is.null(wf$InvocationID) && nzchar(wf$InvocationID)) {
-    return(wf$InvocationID)
+  # Priority 1: Check if InvocationID is already set in the workflow
+  if (!is.null(wf$InvocationID) && nzchar(trimws(wf$InvocationID))) {
+    return(trimws(wf$InvocationID))
   }
   
-  # Check if InvocationIDFromDate format is specified
-  if (!is.null(wf$InvocationIDFromDate) && nzchar(wf$InvocationIDFromDate)) {
-    date_format <- wf$InvocationIDFromDate
-    return(format(Sys.time(), date_format))
+  # Priority 2: Check if InvocationIDFromDate format is specified and valid
+  if (!is.null(wf$InvocationIDFromDate) && nzchar(trimws(wf$InvocationIDFromDate))) {
+    date_format <- trimws(wf$InvocationIDFromDate)
+    # Validate the date format by checking if it contains valid format specifiers
+    # Valid format specifiers are % followed by letters (Y, m, d, H, M, S, etc.)
+    if (!grepl("^[%a-zA-Z0-9\\s:._-]+$", date_format) || !grepl("%[a-zA-Z]", date_format)) {
+      stop(sprintf("Invalid InvocationIDFromDate format '%s': must contain valid date format specifiers (e.g., %%Y%%m%%d)", date_format))
+    }
+    
+    # Try to use the format and validate the result
+    tryCatch({
+      test_result <- format(Sys.time(), date_format)
+      if (nzchar(test_result) && test_result != date_format) {
+        return(test_result)
+      } else {
+        stop("Invalid date format - no valid date specifiers found")
+      }
+    }, error = function(e) {
+      stop(sprintf("Invalid InvocationIDFromDate format '%s': %s", date_format, e$message))
+    })
   }
   
-  # Default: generate a UUID-like ID
-  paste0(format(Sys.time(), "%Y%m%d%H%M%S"), "-", 
-         paste(sample(c(0:9, letters[1:6]), 8, replace = TRUE), collapse = ""))
+  # Priority 3: Generate UUID if both are blank or invalid
+  if (requireNamespace("uuid", quietly = TRUE)) {
+    return(uuid::UUIDgenerate())
+  } else {
+    # Fallback to timestamp-based ID if uuid package not available
+    paste0(format(Sys.time(), "%Y%m%d%H%M%S"), "-", 
+           paste(sample(c(0:9, letters[1:6]), 8, replace = TRUE), collapse = ""))
+  }
 }

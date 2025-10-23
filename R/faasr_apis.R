@@ -206,14 +206,21 @@ faasr_log <- function(log_message) {
 #' }
 #' }
 faasr_rank <- function() {
-  rank_info <- get0("FAASR_CURRENT_RANK_INFO", envir = .GlobalEnv, inherits = FALSE, ifnotfound = NULL)
+  # Try to find the rank info file in the temp directory
+  temp_dir <- file.path(.fa_local_root(), "temp", "faasr_state_info")
+  rank_file <- file.path(temp_dir, "current_rank_info.txt")
   
-  if (is.null(rank_info)) {
+  if (!file.exists(rank_file)) {
+    return(list())
+  }
+  
+  rank_info <- try(readLines(rank_file, warn = FALSE), silent = TRUE)
+  if (inherits(rank_info, "try-error") || length(rank_info) == 0) {
     return(list())
   }
   
   # Parse rank_info which is in format "1/3"
-  parts <- unlist(strsplit(rank_info, "[/]"))
+  parts <- unlist(strsplit(rank_info[1], "[/]"))
   if (length(parts) == 2) {
     return(list(Rank = parts[1], MaxRank = parts[2]))
   }
@@ -237,9 +244,18 @@ faasr_rank <- function() {
 #' }
 #' }
 faasr_invocation_id <- function() {
-  invocation_id <- get0("FAASR_INVOCATION_ID", envir = .GlobalEnv, inherits = FALSE, ifnotfound = NULL)
-  if (is.null(invocation_id)) {
+  # Try to find the invocation ID file in the temp directory
+  temp_dir <- file.path(.fa_local_root(), "temp", "faasr_state_info")
+  inv_file <- file.path(temp_dir, "current_invocation_id.txt")
+  
+  if (!file.exists(inv_file)) {
     return(NULL)
   }
-  invocation_id
+  
+  invocation_id <- try(readLines(inv_file, warn = FALSE), silent = TRUE)
+  if (inherits(invocation_id, "try-error") || length(invocation_id) == 0) {
+    return(NULL)
+  }
+  
+  invocation_id[1]
 }

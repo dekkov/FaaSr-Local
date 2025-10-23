@@ -1,0 +1,10 @@
+[2025-10-22 19:59:12] Listing after put files (tutorial): tutorial/sample1.csv, tutorial/sample2.csv
+[2025-10-22 19:59:12] Listing after create test file (tutorial): tutorial/sample1.csv, tutorial/sample2.csv, tutorial/test.txt
+[2025-10-22 19:59:12] Listing after delete test file (tutorial): tutorial/sample1.csv, tutorial/sample2.csv
+[2025-10-22 19:59:12] Function create_sample_data finished; outputs written to folder tutorial in default S3 bucket
+[2025-10-22 19:59:12] Listing after compute (tutorial): tutorial/sample1.csv, tutorial/sample2.csv, tutorial/sum.csv
+[2025-10-22 19:59:12] Function compute_sum finished; output written to tutorial/sum.csv in default S3 bucket
+[2025-10-22 19:59:12] Listing after compute (tutorial): tutorial/sample1.csv, tutorial/sample2.csv, tutorial/sum.csv
+[2025-10-22 19:59:12] Function compute_sum finished; output written to tutorial/sum.csv in default S3 bucket
+[2025-10-22 19:59:12] Listing after compute (tutorial): tutorial/sample1.csv, tutorial/sample2.csv, tutorial/sum.csv
+[2025-10-22 19:59:12] Function compute_sum finished; output written to tutorial/sum.csv in default S3 bucket
