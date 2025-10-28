@@ -29,36 +29,35 @@
       },
       "InvokeNext": [
         {
-          "True": [
-            "ranked_function(3)"
-          ],
-          "False": [
-            "branch"
-          ]
+          "True": ["A"],
+          "False": ["B"]
         }
       ]
     },
-    "ranked_function": {
-      "FunctionName": "test_rank_function",
+    "A": {
+      "FunctionName": "return_output",
       "FaaSServer": "My_GitHub_Account",
       "Type": "R",
       "Arguments": {
-        "message": "Ranked execution"
+        "condition": true
       },
       "InvokeNext": [
-        "final_function"
+        {
+          "True": ["C"],
+          "False": ["D"]
+        }
       ]
     },
-    "final_function": {
-      "FunctionName": "test_rank_function",
+    "B": {
+      "FunctionName": "return_output",
       "FaaSServer": "My_GitHub_Account",
       "Type": "R",
       "Arguments": {
-        "message": "final function"
+        "condition": true
       },
-      "InvokeNext": []
+      "InvokeNext": ["E"]
     },
-    "branch": {
+    "C": {
       "FunctionName": "return_output",
       "FaaSServer": "My_GitHub_Account",
       "Type": "R",
@@ -66,15 +65,46 @@
         "condition": true
       },
       "InvokeNext": ["final_function"]
+    },
+    "D": {
+      "FunctionName": "return_output",
+      "FaaSServer": "My_GitHub_Account",
+      "Type": "R",
+      "Arguments": {
+        "condition": true
+      },
+      "InvokeNext": ["final_function"]
+    },
+    "E": {
+      "FunctionName": "return_output",
+      "FaaSServer": "My_GitHub_Account",
+      "Type": "R",
+      "Arguments": {
+        "condition": true
+      },
+      "InvokeNext": ["final_function"]
+    },
+    "final_function": {
+      "FunctionName": "return_output",
+      "FaaSServer": "My_GitHub_Account",
+      "Type": "R",
+      "Arguments": {
+        "condition": true
+      },
+      "InvokeNext": []
     }
   },
   "ActionContainers": {
     "start_function": "ghcr.io/faasr/github-actions-tidyverse",
-    "ranked_function": "ghcr.io/faasr/github-actions-tidyverse",
+    "A": "ghcr.io/faasr/github-actions-tidyverse",
+    "B": "ghcr.io/faasr/github-actions-tidyverse",
+    "C": "ghcr.io/faasr/github-actions-tidyverse",
+    "D": "ghcr.io/faasr/github-actions-tidyverse",
+    "E": "ghcr.io/faasr/github-actions-tidyverse",
     "final_function": "ghcr.io/faasr/github-actions-tidyverse"
   },
   "FunctionGitRepo": {
-    "test_rank_function": "test/test-repo"
+    "return_output": "test/test-repo"
   },
   "FunctionInvoke": "start_function",
   "InvocationID": "INVOCATION_ID",
@@ -82,5 +112,6 @@
   "FaaSrLog": "FaaSrLog",
   "LoggingDataStore": "My_Minio_Bucket",
   "DefaultDataStore": "My_Minio_Bucket",
-  "WorkflowName": "rank_test"
+  "WorkflowName": "nested_conditional_test"
 }
+

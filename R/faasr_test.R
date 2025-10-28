@@ -141,6 +141,9 @@ faasr_test <- function(json_path) {
   if (!identical(cfg_once, TRUE)) {
     stop(cfg_once)
   }
+  
+  # Compute conditional reachability map for predecessor gating
+  reachability_map <- .faasr_compute_conditional_reachability(wf$ActionList)
 
   visited <- character()
   while (length(queue) > 0) {
@@ -163,7 +166,7 @@ faasr_test <- function(json_path) {
     args <- node$Arguments %||% list()
 
     # Predecessor gating prior to execution 
-    cfg <- faasr_predecessor_gate(wf$ActionList, name, state_dir)
+    cfg <- faasr_predecessor_gate(wf$ActionList, name, state_dir, reachability_map)
     if (identical(cfg, "next")) {
       next
     }
@@ -298,6 +301,8 @@ faasr_configuration_check <- function(faasr, state_dir) {
   }
 
   # Predecessor type consistency check
+  # This check validates that predecessors don't mix conditional and unconditional edges
+  # which would create ambiguous execution semantics
   pred_consistency <- try(.faasr_check_predecessor_consistency(faasr$ActionList), silent = TRUE)
   if (inherits(pred_consistency, "try-error")) {
     return(as.character(pred_consistency))
@@ -443,6 +448,187 @@ faasr_configuration_check <- function(faasr, state_dir) {
   unique_predecessors
 }
 
+#' @name .faasr_get_reachable_functions
+#' @title Get all functions reachable from a starting function
+#' @description
+#' Internal recursive function to find all functions reachable from a starting function
+#' using depth-first search. Handles both conditional and unconditional edges.
+#' @param action_list List containing the workflow action definitions
+#' @param start_func Character string name of the starting function
+#' @param visited Character vector of already visited functions (prevents cycles)
+#' @return Character vector of all reachable function names
+#' @keywords internal
+.faasr_get_reachable_functions <- function(action_list, start_func, visited = character()) {
+  # Avoid cycles
+  if (start_func %in% visited) {
+    return(character())
+  }
+  
+  # Check if function exists in action list
+  if (!(start_func %in% names(action_list))) {
+    return(character())
+  }
+  
+  visited <- c(visited, start_func)
+  reachable <- start_func
+  
+  # Get InvokeNext for this function
+  nx <- action_list[[start_func]]$InvokeNext %||% list()
+  
+  # Collect next function names
+  next_funcs <- character()
+  
+  if (is.character(nx)) {
+    # Simple string or array of strings
+    next_funcs <- sub("\\(.*$", "", nx)
+  } else if (is.list(nx)) {
+    for (item in nx) {
+      if (is.character(item)) {
+        # String in list
+        next_funcs <- c(next_funcs, sub("\\(.*$", "", item))
+      } else if (is.list(item)) {
+        # Conditional {True/False} structure
+        if (!is.null(item$True)) {
+          next_funcs <- c(next_funcs, sub("\\(.*$", "", unlist(item$True)))
+        }
+        if (!is.null(item$False)) {
+          next_funcs <- c(next_funcs, sub("\\(.*$", "", unlist(item$False)))
+        }
+      }
+    }
+  }
+  
+  # Recursively find reachable functions
+  for (nf in next_funcs) {
+    reachable <- c(reachable, .faasr_get_reachable_functions(action_list, nf, visited))
+  }
+  
+  unique(reachable)
+}
+
+#' @name .faasr_compute_conditional_reachability
+#' @title Compute reachability map for conditional branches
+#' @description
+#' Internal function to pre-compute which functions are reachable from each branch
+#' of each conditional in the workflow. This map is used to determine if predecessors
+#' are mutually exclusive alternatives or independent parallel paths.
+#' @param action_list List containing the workflow action definitions
+#' @return List mapping conditional IDs to reachable functions in True/False branches
+#' @keywords internal
+.faasr_compute_conditional_reachability <- function(action_list) {
+  reachability_map <- list()
+  
+  # Iterate through all functions
+  for (func_name in names(action_list)) {
+    nx <- action_list[[func_name]]$InvokeNext %||% list()
+    
+    # Check if this function has conditional InvokeNext
+    has_conditional <- FALSE
+    if (is.list(nx)) {
+      for (item in nx) {
+        if (is.list(item) && (!is.null(item$True) || !is.null(item$False))) {
+          has_conditional <- TRUE
+          
+          # Create unique conditional ID
+          cond_id <- paste0(func_name, "_conditional")
+          
+          # Get functions in True branch
+          true_funcs <- character()
+          if (!is.null(item$True)) {
+            true_start_funcs <- sub("\\(.*$", "", unlist(item$True))
+            for (tf in true_start_funcs) {
+              true_funcs <- c(true_funcs, .faasr_get_reachable_functions(action_list, tf))
+            }
+          }
+          
+          # Get functions in False branch
+          false_funcs <- character()
+          if (!is.null(item$False)) {
+            false_start_funcs <- sub("\\(.*$", "", unlist(item$False))
+            for (ff in false_start_funcs) {
+              false_funcs <- c(false_funcs, .faasr_get_reachable_functions(action_list, ff))
+            }
+          }
+          
+          # Store in reachability map
+          reachability_map[[cond_id]] <- list(
+            conditional_source = func_name,
+            True = unique(true_funcs),
+            False = unique(false_funcs)
+          )
+          
+          break  # Only process first conditional in InvokeNext
+        }
+      }
+    }
+  }
+  
+  reachability_map
+}
+
+#' @name .faasr_classify_predecessor_groups
+#' @title Classify predecessors into independent and exclusive groups
+#' @description
+#' Internal function to classify a function's predecessors based on conditional reachability.
+#' Predecessors from different branches of the same conditional are mutually exclusive
+#' (only one needs to complete). Truly independent predecessors must all complete.
+#' @param action_list List containing the workflow action definitions
+#' @param target_func Character string name of the target function
+#' @param reachability_map List mapping conditional IDs to reachable functions
+#' @return List with 'independent' predecessors and 'exclusive_groups' of alternatives
+#' @keywords internal
+.faasr_classify_predecessor_groups <- function(action_list, target_func, reachability_map) {
+  # Get all predecessors
+  predecessors <- .faasr_find_predecessors(action_list, target_func, unconditional_only = FALSE)
+  
+  # Handle trivial cases
+  if (length(predecessors) == 0) {
+    return(list(independent = character(), exclusive_groups = list()))
+  }
+  
+  if (length(predecessors) == 1) {
+    return(list(independent = predecessors, exclusive_groups = list()))
+  }
+  
+  # Track which predecessors have been assigned to exclusive groups
+  assigned <- character()
+  exclusive_groups <- list()
+  
+  # Check each conditional in the reachability map
+  for (cond_id in names(reachability_map)) {
+    cond <- reachability_map[[cond_id]]
+    
+    # Find which predecessors are reachable from each branch
+    true_preds <- intersect(predecessors, cond$True)
+    false_preds <- intersect(predecessors, cond$False)
+    
+    # If predecessors are split across branches, they're mutually exclusive
+    if (length(true_preds) > 0 && length(false_preds) > 0) {
+      group <- list(
+        conditional_id = cond_id,
+        conditional_source = cond$conditional_source,
+        branches = list(
+          True = true_preds,
+          False = false_preds
+        )
+      )
+      exclusive_groups <- c(exclusive_groups, list(group))
+      assigned <- c(assigned, true_preds, false_preds)
+    }
+  }
+  
+  # Remove duplicates from assigned
+  assigned <- unique(assigned)
+  
+  # Any predecessors not assigned to exclusive groups are truly independent
+  independent <- setdiff(predecessors, assigned)
+  
+  list(
+    independent = independent,
+    exclusive_groups = exclusive_groups
+  )
+}
+
 # IMPROVED VERSION 
 # This version only gates on unconditional predecessors to prevent deadlocks
 # when a function appears in both conditional and unconditional paths.
@@ -503,28 +689,41 @@ faasr_configuration_check <- function(faasr, state_dir) {
 #' deadlock with conditional branches.
 #' @param action_list List containing the workflow action definitions
 #' @param target_func Character string name of the target function
+#' @param unconditional_only Logical, if TRUE only return unconditional predecessors
 #' @return Character vector of predecessor function names
 #' @keywords internal
-.faasr_find_predecessors <- function(action_list, target_func) {
+.faasr_find_predecessors <- function(action_list, target_func, unconditional_only = FALSE) {
   preds <- character()
   for (nm in names(action_list)) {
     nx <- action_list[[nm]]$InvokeNext %||% list()
     next_names <- character()
+    is_conditional <- FALSE
+    
     if (is.character(nx)) {
+      # Unconditional edge
       next_names <- sub("\\(.*$", "", nx)
     } else if (is.list(nx)) {
       for (item in nx) {
         if (is.character(item)) {
+          # Unconditional edge in list
           next_names <- c(next_names, sub("\\(.*$", "", item))
         } else if (is.list(item)) {
-          # Include ALL branches (both True and False)
-          if (!is.null(item$True)) next_names <- c(next_names, sub("\\(.*$", "", unlist(item$True)))
-          if (!is.null(item$False)) next_names <- c(next_names, sub("\\(.*$", "", unlist(item$False)))
+          # Conditional edge - check if this function is in True/False branches
+          is_conditional <- TRUE
+          if (!unconditional_only) {
+            if (!is.null(item$True)) next_names <- c(next_names, sub("\\(.*$", "", unlist(item$True)))
+            if (!is.null(item$False)) next_names <- c(next_names, sub("\\(.*$", "", unlist(item$False)))
+          }
         }
       }
     }
+    
+    # Only add if the target function is found in the next names
     if (length(next_names) && any(next_names == target_func)) {
-      preds <- c(preds, nm)
+      # If unconditional_only is TRUE, only add if this was not a conditional edge
+      if (!unconditional_only || !is_conditional) {
+        preds <- c(preds, nm)
+      }
     }
   }
   unique(preds)
@@ -534,23 +733,59 @@ faasr_configuration_check <- function(faasr, state_dir) {
 #' @title Gate function execution based on predecessors
 #' @description
 #' Internal function to check if all predecessor functions have completed before
-#' allowing the current function to execute. Uses .done files to track completion.
+#' allowing the current function to execute. Uses conditional reachability analysis
+#' to distinguish between independent predecessors (all must complete) and mutually
+#' exclusive alternatives (only one must complete).
 #' @param action_list List containing the workflow action definitions
 #' @param current_func Character string name of the current function
 #' @param state_dir Character string path to the state directory
+#' @param reachability_map List mapping conditional IDs to reachable functions
 #' @return "next" if predecessors not ready, TRUE if ready to execute
 #' @keywords internal
-faasr_predecessor_gate <- function(action_list, current_func, state_dir) {
-  predecessors <- .faasr_find_predecessors(action_list, current_func)
-  if (length(predecessors) > 1) {
-    done_list <- try(list.files(state_dir), silent = TRUE)
-    if (inherits(done_list, "try-error")) done_list <- character()
-    for (p in predecessors) {
-      if (!(paste0(p, ".done") %in% done_list)) {
+faasr_predecessor_gate <- function(action_list, current_func, state_dir, reachability_map) {
+  # Classify predecessors into independent and exclusive groups
+  classification <- .faasr_classify_predecessor_groups(action_list, current_func, reachability_map)
+  
+  # If no predecessors, allow execution
+  if (length(classification$independent) == 0 && length(classification$exclusive_groups) == 0) {
+    return(TRUE)
+  }
+  
+  # Get list of completed functions
+  done_list <- try(list.files(state_dir), silent = TRUE)
+  if (inherits(done_list, "try-error")) done_list <- character()
+  
+  # Check independent predecessors: ALL must be completed
+  if (length(classification$independent) > 0) {
+    for (pred_name in classification$independent) {
+      if (!(paste0(pred_name, ".done") %in% done_list)) {
         return("next")
       }
     }
   }
+  
+  # Check exclusive groups: at least ONE from EACH group must be completed
+  if (length(classification$exclusive_groups) > 0) {
+    for (group in classification$exclusive_groups) {
+      # Collect all predecessors in this group (from all branches)
+      all_preds_in_group <- c(group$branches$True, group$branches$False)
+      
+      # Check if at least one from this group has completed
+      any_completed <- FALSE
+      for (pred_name in all_preds_in_group) {
+        if (paste0(pred_name, ".done") %in% done_list) {
+          any_completed <- TRUE
+          break
+        }
+      }
+      
+      # If none from this group completed, we must wait
+      if (!any_completed) {
+        return("next")
+      }
+    }
+  }
+  
   TRUE
 }
 
