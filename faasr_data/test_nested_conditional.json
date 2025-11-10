@@ -84,7 +84,7 @@
       },
       "InvokeNext": ["final_function"]
     },
-    "final_function": {
+    "hello": {
       "FunctionName": "return_output",
       "FaaSServer": "My_GitHub_Account",
       "Type": "R",
