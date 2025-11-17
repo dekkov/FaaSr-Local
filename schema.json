@@ -22,7 +22,8 @@
     "WorkflowName": {
       "description": "A string that names the workflow for logging purposes - mandatory",
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "pattern": "^[a-zA-Z][a-zA-Z0-9-]*$"
     },
     "InvocationIDFromDate": {
       "description": "An optional strftime format string to derive a unique InvocationID from the InvocationTimestamp (e.g., '%Y%m%d' for daily, '%Y%m%d%H' for hourly)",
@@ -77,13 +78,22 @@
                 "R"
               ]
             },
+            "RequiresVM": {
+          "type": "boolean",
+          "description": "Whether this action requires VM resources",
+          "default": false
+        },
+        "_faasr_builtin": {
+            "type": "boolean",
+            "description": "Internal flag: true if this is a framework built-in function"
+          },
             "InvokeNext": {
               "type": "array",
               "items": {
                 "anyOf": [
                   {
                     "type": "string",
-                    "pattern": "^[a-zA-Z_][a-zA-Z0-9_-]*(?:\\[(?:TRUE|FALSE|true|false|True|False)\\])?(?:\\([0-9]+\\))?$"
+                    "pattern": "^[a-zA-Z][a-zA-Z0-9-]*(?:\\([0-9]+\\))?$"
                   },
                   {
                     "type": "object",
@@ -92,14 +102,14 @@
                         "type": "array",
                         "items": {
                           "type": "string",
-                          "pattern": "^[a-zA-Z_][a-zA-Z0-9_-]*(?:\\[(?:TRUE|FALSE|true|false|True|False)\\])?(?:\\([0-9]+\\))?$"
+                          "pattern": "^[a-zA-Z][a-zA-Z0-9-]*(?:\\([0-9]+\\))?$"
                         }
                       },
                       "False": {
                         "type": "array",
                         "items": {
                           "type": "string",
-                          "pattern": "^[a-zA-Z_][a-zA-Z0-9_-]*(?:\\[(?:TRUE|FALSE|true|false|True|False)\\])?(?:\\([0-9]+\\))?$"
+                          "pattern": "^[a-zA-Z][a-zA-Z0-9-]*(?:\\([0-9]+\\))?$"
                         }
                       }
                     },
@@ -472,6 +482,43 @@
         }
       }
     },
+    "VMConfig": {
+  "type": "object",
+  "description": "Configuration for VM orchestration",
+  "properties": {
+    "Name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Name of VM configuration"
+    },
+    "Provider": {
+      "type": "string",
+      "enum": ["AWS"],
+      "description": "Cloud provider for VM instances"
+    },
+    "InstanceId": {
+      "type": "string",
+      "description": "Existing EC2 instance ID"
+    },
+    "Region": {
+      "type": "string",
+      "description": "AWS region for the VM"
+    },
+    "AccessKey": {
+      "type": "string",
+      "description": "AWS access key credential reference"
+    },
+    "SecretKey": {
+      "type": "string",
+      "description": "AWS secret key credential reference"
+    },
+    "RunnerName": {
+      "type": "string",
+      "description": "Expected GitHub Actions self-hosted runner name"
+    }
+  },
+  "required": ["Name","Provider", "InstanceId", "Region"]
+},
     "ActionContainers": {
       "description": "A mapping of action names to containers(Docker Hub)",
       "type": "object",
@@ -611,3 +658,4 @@
     "DataStores"
   ]
 }
+

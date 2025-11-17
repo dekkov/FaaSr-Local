@@ -20,7 +20,7 @@
     }
   },
   "ActionList": {
-    "start_function": {
+    "start-function": {
       "FunctionName": "return_output",
       "FaaSServer": "My_GitHub_Account",
       "Type": "R",
@@ -39,7 +39,7 @@
       "FaaSServer": "My_GitHub_Account",
       "Type": "R",
       "Arguments": {
-        "condition": true
+        "condition": false
       },
       "InvokeNext": [
         {
@@ -64,7 +64,7 @@
       "Arguments": {
         "condition": true
       },
-      "InvokeNext": ["final_function"]
+      "InvokeNext": ["final-function"]
     },
     "D": {
       "FunctionName": "return_output",
@@ -73,7 +73,7 @@
       "Arguments": {
         "condition": true
       },
-      "InvokeNext": ["final_function"]
+      "InvokeNext": ["final-function"]
     },
     "E": {
       "FunctionName": "return_output",
@@ -82,9 +82,9 @@
       "Arguments": {
         "condition": true
       },
-      "InvokeNext": ["final_function"]
+      "InvokeNext": ["final-function"]
     },
-    "hello": {
+    "final-function": {
       "FunctionName": "return_output",
       "FaaSServer": "My_GitHub_Account",
       "Type": "R",
@@ -95,23 +95,23 @@
     }
   },
   "ActionContainers": {
-    "start_function": "ghcr.io/faasr/github-actions-tidyverse",
+    "start-function": "ghcr.io/faasr/github-actions-tidyverse",
     "A": "ghcr.io/faasr/github-actions-tidyverse",
     "B": "ghcr.io/faasr/github-actions-tidyverse",
     "C": "ghcr.io/faasr/github-actions-tidyverse",
     "D": "ghcr.io/faasr/github-actions-tidyverse",
     "E": "ghcr.io/faasr/github-actions-tidyverse",
-    "final_function": "ghcr.io/faasr/github-actions-tidyverse"
+    "final-function": "ghcr.io/faasr/github-actions-tidyverse"
   },
   "FunctionGitRepo": {
     "return_output": "test/test-repo"
   },
-  "FunctionInvoke": "start_function",
+  "FunctionInvoke": "start-function",
   "InvocationID": "INVOCATION_ID",
   "InvocationIDFromDate": "%Y%m%d%H%M",
   "FaaSrLog": "FaaSrLog",
   "LoggingDataStore": "My_Minio_Bucket",
   "DefaultDataStore": "My_Minio_Bucket",
-  "WorkflowName": "nested_conditional_test"
+  "WorkflowName": "nested-conditional-test"
 }
 

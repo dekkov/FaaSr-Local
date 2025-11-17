@@ -20,7 +20,7 @@
       }
     },
     "ActionList": {
-      "start_function": {
+      "start-function": {
         "FunctionName": "return_output",
         "FaaSServer": "My_GitHub_Account",
         "Type": "R",
@@ -28,10 +28,10 @@
           "condition": false
         },
         "InvokeNext": [
-          {"True": ["ranked_function(3)"], "False": ["final_function"]}
+          {"True": ["ranked-function(3)"], "False": ["final-function"]}
         ]
       },
-      "ranked_function": {
+      "ranked-function": {
         "FunctionName": "test_rank_function",
         "FaaSServer": "My_GitHub_Account",
         "Type": "R",
@@ -39,10 +39,10 @@
           "message": "Ranked execution"
         },
         "InvokeNext": [
-          "final_function"
+          "final-function"
         ]
       },
-      "final_function": {
+      "final-function": {
         "FunctionName": "test_rank_function",
         "FaaSServer": "My_GitHub_Account",
         "Type": "R",
@@ -53,20 +53,20 @@
       }
     },
     "ActionContainers": {
-      "start_function": "ghcr.io/faasr/github-actions-tidyverse",
-      "ranked_function": "ghcr.io/faasr/github-actions-tidyverse",
-      "final_function": "ghcr.io/faasr/github-actions-tidyverse"
+      "start-function": "ghcr.io/faasr/github-actions-tidyverse",
+      "ranked-function": "ghcr.io/faasr/github-actions-tidyverse",
+      "final-function": "ghcr.io/faasr/github-actions-tidyverse"
     },
     "FunctionGitRepo": {
       "test_rank_function": "test/test-repo"
     },
-    "FunctionInvoke": "start_function",
+    "FunctionInvoke": "start-function",
     "InvocationID": "INVOCATION_ID",
     "InvocationIDFromDate": "%Y%m%d%H%M",
     "FaaSrLog": "FaaSrLog",
     "LoggingDataStore": "My_Minio_Bucket",
     "DefaultDataStore": "My_Minio_Bucket",
-    "WorkflowName": "rank_test"
+    "WorkflowName": "rank-test"
   }
   
   

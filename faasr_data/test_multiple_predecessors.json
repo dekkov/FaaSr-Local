@@ -29,7 +29,7 @@
             "output1": "sample1.csv",
             "output2": "sample2.csv"
         },
-        "InvokeNext": ["prep1", "sum"]
+        "InvokeNext": ["prep1", "prep2"]
       },
       "prep1": {
         "FunctionName": "create_sample_data",
@@ -40,7 +40,7 @@
             "output1": "sample1.csv",
             "output2": "sample2.csv"
         },
-        "InvokeNext": ["prep2"]
+        "InvokeNext": ["sum"]
       },
       "prep2": {
         "FunctionName": "create_sample_data",
